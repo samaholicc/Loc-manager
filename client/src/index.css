@@ -1,0 +1,47 @@
+@import url("https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap");
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  font-family: 'Montserrat';
+}
+
+.background {
+  background: #eeeff1;
+  background-attachment: fixed;
+}
+
+.backgroundAuth {
+  background: linear-gradient(45deg, rgba(131, 220, 255, 0.824), rgba(255, 105, 180, 0.898)), url('../public/pngwing.com\ \(2\).png') no-repeat center center/ cover;
+  background-attachment: fixed;
+}
+
+input,
+textarea {
+  outline: none !important;
+  border: none !important;
+  resize: none !important;
+}
+
+.card {
+  @apply bg-white rounded-md shadow-md;
+}
+
+.dashboardSkeleton {
+  @apply pr-5 flex w-auto justify-between;
+}
+
+a:hover {
+  transition: all 0.1s ease-in-out;
+  opacity: 0.8;
+}
+
+/* *{
+  color: white !important;
+} */
+
+

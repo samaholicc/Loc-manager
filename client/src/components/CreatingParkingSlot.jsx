@@ -1,21 +1,21 @@
 import axios from "axios";
 import React, { useState, useEffect } from "react";
 import { toast } from "react-toastify";
+import { useTheme } from "../context/ThemeContext"; // Import ThemeContext
 
 function CreatingParkingSlot() {
+  const { darkMode } = useTheme(); // Access darkMode state
   const [roomNo, setRoomNo] = useState("");
   const [slotNo, setSlotNo] = useState("");
   const [occupiedRooms, setOccupiedRooms] = useState([]);
   const [availableSlots, setAvailableSlots] = useState([]);
 
-  // Fetch occupied rooms and available parking slots on component mount
   useEffect(() => {
     const fetchOccupiedRooms = async () => {
       try {
         const res = await axios.get(`${process.env.REACT_APP_SERVER}/occupied-rooms`);
-        console.log("Occupied rooms response:", res.data); // Debug log
+        console.log("Occupied rooms response:", res.data);
         if (res.status === 200) {
-          // Ensure the response data is an array
           const rooms = Array.isArray(res.data) ? res.data : [];
           setOccupiedRooms(rooms);
         } else {
@@ -25,16 +25,15 @@ function CreatingParkingSlot() {
       } catch (error) {
         console.error("Error fetching occupied rooms:", error);
         toast.error("Erreur lors de la récupération des chambres occupées");
-        setOccupiedRooms([]); // Fallback to empty array on error
+        setOccupiedRooms([]);
       }
     };
 
     const fetchAvailableSlots = async () => {
       try {
         const res = await axios.get(`${process.env.REACT_APP_SERVER}/available-parking-slots`);
-        console.log("Available slots response:", res.data); // Debug log
+        console.log("Available slots response:", res.data);
         if (res.status === 200) {
-          // Ensure the response data is an array
           const slots = Array.isArray(res.data) ? res.data : [];
           setAvailableSlots(slots);
         } else {
@@ -44,7 +43,7 @@ function CreatingParkingSlot() {
       } catch (error) {
         console.error("Error fetching available parking slots:", error);
         toast.error("Erreur lors de la récupération des places de parking disponibles");
-        setAvailableSlots([]); // Fallback to empty array on error
+        setAvailableSlots([]);
       }
     };
 
@@ -67,7 +66,6 @@ function CreatingParkingSlot() {
         setRoomNo("");
         setSlotNo("");
         toast.success("Place de parking attribuée");
-        // Refresh available slots after booking
         const slotRes = await axios.get(`${process.env.REACT_APP_SERVER}/available-parking-slots`);
         const slots = Array.isArray(slotRes.data) ? slotRes.data : [];
         setAvailableSlots(slots);
@@ -84,20 +82,34 @@ function CreatingParkingSlot() {
   };
 
   return (
-    <div className="flex items-center justify-center h-screen w-screen bg-gray-100">
+    <div
+      className={`flex items-center justify-center h-screen w-screen transition-all duration-300 ${
+        darkMode ? "bg-gray-900" : "bg-gray-100"
+      }`}
+    >
       <div className="container mx-auto">
-        <div className="max-w-md mx-auto my-5 p-5 bg-white rounded-lg shadow-md">
+        <div
+          className={`max-w-md mx-auto my-5 p-5 rounded-lg shadow-md transition-all duration-300 ${
+            darkMode ? "bg-gray-800" : "bg-white"
+          }`}
+        >
           <div className="m-7">
             <form onSubmit={handleSubmit} action="" method="POST" id="form">
               <div>
-                <h1 className="text-center font-bold text-gray-600 my-2">
+                <h1
+                  className={`text-center font-bold my-2 ${
+                    darkMode ? "text-gray-200" : "text-gray-600"
+                  }`}
+                >
                   Place de parking
                 </h1>
               </div>
               <div className="mb-6">
                 <label
                   htmlFor="roomNo"
-                  className="block mb-2 text-base text-gray-600"
+                  className={`block mb-2 text-base ${
+                    darkMode ? "text-gray-200" : "text-gray-600"
+                  }`}
                 >
                   Numéro de chambre
                 </label>
@@ -105,7 +117,11 @@ function CreatingParkingSlot() {
                   id="roomNo"
                   value={roomNo}
                   onChange={(e) => setRoomNo(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring focus:ring-indigo-100 focus:border-indigo-300 bg-[#eeeff1]"
+                  className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring focus:ring-indigo-100 focus:border-indigo-300 transition-all duration-300 ${
+                    darkMode
+                      ? "bg-gray-700 text-gray-200 border-gray-600"
+                      : "bg-[#eeeff1] text-gray-800 border-gray-300"
+                  }`}
                   required
                 >
                   <option value="">Sélectionnez une chambre occupée</option>
@@ -126,7 +142,9 @@ function CreatingParkingSlot() {
               <div className="mb-6">
                 <label
                   htmlFor="slotNo"
-                  className="text-base mb-2 block text-gray-600"
+                  className={`text-base mb-2 block ${
+                    darkMode ? "text-gray-200" : "text-gray-600"
+                  }`}
                 >
                   Numéro de parking
                 </label>
@@ -134,7 +152,11 @@ function CreatingParkingSlot() {
                   id="slotNo"
                   value={slotNo}
                   onChange={(e) => setSlotNo(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring focus:ring-indigo-100 focus:border-indigo-300 bg-[#eeeff1]"
+                  className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring focus:ring-indigo-100 focus:border-indigo-300 transition-all duration-300 ${
+                    darkMode
+                      ? "bg-gray-700 text-gray-200 border-gray-600"
+                      : "bg-[#eeeff1] text-gray-800 border-gray-300"
+                  }`}
                   required
                 >
                   <option value="">Sélectionnez une place de parking disponible</option>
@@ -155,12 +177,21 @@ function CreatingParkingSlot() {
               <div className="mb-6">
                 <button
                   type="submit"
-                  className="w-full px-3 py-3 text-white bg-blue-500 rounded-md focus:bg-blue-600 focus:outline-none hover:bg-white hover:text-blue-500 transition-all duration-300 hover:border-blue-500 border-transparent border-2"
+                  className={`w-full px-3 py-3 rounded-md focus:outline-none transition-all duration-300 border-2 ${
+                    darkMode
+                      ? "bg-blue-600 text-white hover:bg-gray-800 hover:text-blue-400 hover:border-blue-400"
+                      : "bg-blue-500 text-white hover:bg-white hover:text-blue-500 hover:border-blue-500 border-transparent"
+                  }`}
                 >
                   Réserver une place
                 </button>
               </div>
-              <p className="text-base text-center text-gray-400" id="result"></p>
+              <p
+                className={`text-base text-center ${
+                  darkMode ? "text-gray-400" : "text-gray-400"
+                }`}
+                id="result"
+              ></p>
             </form>
           </div>
         </div>

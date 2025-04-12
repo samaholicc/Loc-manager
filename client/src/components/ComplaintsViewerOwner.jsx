@@ -1,37 +1,35 @@
-/* eslint-disable no-multi-str */
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState } from "react";
 import axios from "axios";
-import { motion, AnimatePresence } from "framer-motion"; // For animations
-import { FaSyncAlt, FaSearch, FaCheckCircle } from "react-icons/fa"; // Icons
+import { MdDeleteForever } from "react-icons/md";
+import { toast } from "react-toastify";
+import { useTheme } from "../context/ThemeContext"; // Import ThemeContext
 
-function ComplaintsViewer(props) {
+function ComplaintsViewerOwner(props) {
+  const { darkMode } = useTheme(); // Access darkMode state
   const [comps, setComps] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [sortBy, setSortBy] = useState("room_no"); // Default sort by room_no
-  const [sortOrder, setSortOrder] = useState("asc"); // Default ascending
-  const [filterResolved, setFilterResolved] = useState(false); // Filter unresolved complaints
-  const [searchQuery, setSearchQuery] = useState(""); // Search query
-  const [currentPage, setCurrentPage] = useState(1); // Pagination
-  const complaintsPerPage = 6; // Number of complaints per page
 
   const getComplaints = async () => {
-    setLoading(true);
-    setError(null);
     try {
-      const userId = JSON.parse(localStorage.getItem("whom"))?.username;
-      if (!userId) {
-        throw new Error("Utilisateur non connecté. Veuillez vous connecter.");
-      }
-      const res = await axios.post(`${process.env.REACT_APP_SERVER}/ownercomplaints`, {
-        userId,
-      });
+      const res = await axios.get(`${process.env.REACT_APP_SERVER}/viewcomplaints`);
       setComps(res.data);
+      console.log({ res });
+    } catch (err) {
+      console.log(err);
+    }
+  };
+
+  const deleteComplaints = async (room_no) => {
+    try {
+      const res = await axios.post(`${process.env.REACT_APP_SERVER}/deletecomplaint`, {
+        roomId: room_no,
+      });
+      if (res.status === 200) {
+        toast.success("Supprimé avec succès");
+        getComplaints();
+      }
     } catch (error) {
-      console.error("Erreur lors de la récupération des plaintes:", error);
-      setError(error.message || "Une erreur s'est produite lors de la récupération des plaintes.");
-    } finally {
-      setLoading(false);
+      console.log(error);
+      toast.error(error.message);
     }
   };
 
@@ -39,219 +37,109 @@ function ComplaintsViewer(props) {
     getComplaints();
   }, []);
 
-  const handleResolveComplaint = async (room_no) => {
-    try {
-      await axios.post(`${process.env.REACT_APP_SERVER}/deletecomplaint`, {
-        room_no,
-      });
-      setComps(comps.map((comp) => 
-        comp.room_no === room_no ? { ...comp, resolved: true, complaints: null } : comp
-      ));
-    } catch (error) {
-      console.error("Erreur lors de la résolution de la plainte:", error);
-      alert("Erreur lors de la résolution de la plainte.");
-    }
-  };
-
-  const handleSort = (field) => {
-    if (sortBy === field) {
-      setSortOrder(sortOrder === "asc" ? "desc" : "asc");
-    } else {
-      setSortBy(field);
-      setSortOrder("asc");
-    }
-  };
-
-  // Filter and sort complaints
-  const filteredComplaints = useMemo(() => {
-    let filtered = comps.filter((ele) => ele.complaints && ele.room_no);
-
-    // Apply search filter
-    if (searchQuery) {
-      filtered = filtered.filter(
-        (ele) =>
-          ele.room_no.toString().includes(searchQuery) ||
-          ele.complaints.toLowerCase().includes(searchQuery.toLowerCase())
-      );
-    }
-
-    // Apply resolved filter
-    if (filterResolved) {
-      filtered = filtered.filter((ele) => !ele.resolved);
-    }
-
-    // Apply sorting
-    return filtered.sort((a, b) => {
-      const valueA = a[sortBy];
-      const valueB = b[sortBy];
-      if (sortOrder === "asc") {
-        return valueA > valueB ? 1 : -1;
-      } else {
-        return valueA < valueB ? 1 : -1;
-      }
-    });
-  }, [comps, searchQuery, filterResolved, sortBy, sortOrder]);
-
-  // Pagination logic
-  const totalComplaints = filteredComplaints.length;
-  const totalPages = Math.ceil(totalComplaints / complaintsPerPage);
-  const paginatedComplaints = filteredComplaints.slice(
-    (currentPage - 1) * complaintsPerPage,
-    currentPage * complaintsPerPage
-  );
-
-  const handlePageChange = (page) => {
-    setCurrentPage(page);
-  };
-
   return (
-    <div className="p-5 min-h-screen w-full bg-gradient-to-b from-gray-50 to-gray-100">
-      {/* Header */}
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-3xl font-bold text-[#07074D]">
-          Plaintes ({totalComplaints})
-        </h1>
-        <div className="flex gap-3 items-center">
-          <button
-            onClick={getComplaints}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-all duration-300"
+    <section
+      className={`min-h-screen py-25 px-10 flex justify-center items-center ml-[1px] w-[calc(100%-1px)] transition-all duration-300 ${
+        darkMode ? "bg-gray-900" : "bg-gray-100"
+      }`}
+    >
+      <div
+        className={`container rounded-xl shadow-lg overflow-hidden max-w-6xl w-full transition-all duration-300 ${
+          darkMode ? "bg-gray-800" : "bg-white"
+        }`}
+      >
+        <div className="p-6">
+          <h2
+            className={`text-2xl font-bold mb-6 text-center ${
+              darkMode ? "text-gray-200" : "text-gray-800"
+            }`}
           >
-            <FaSyncAlt className={loading ? "animate-spin" : ""} />
-            Rafraîchir
-          </button>
-          <div className="relative">
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Rechercher par chambre ou plainte..."
-              className="pl-10 pr-4 py-2 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-            <FaSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-          </div>
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={filterResolved}
-              onChange={(e) => setFilterResolved(e.target.checked)}
-              className="form-checkbox h-5 w-5 text-blue-500"
-            />
-            <span className="text-gray-700">Afficher uniquement les plaintes non résolues</span>
-          </label>
-        </div>
-      </div>
-
-      {/* Main Content */}
-      {loading ? (
-        <div className="flex justify-center items-center h-64">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-blue-500 border-solid"></div>
-        </div>
-      ) : error ? (
-        <div className="text-center text-red-500 text-lg font-medium p-5 bg-white rounded-lg shadow-md max-w-md mx-auto">
-          {error}
-        </div>
-      ) : paginatedComplaints.length === 0 ? (
-        <div className="text-center text-gray-600 text-lg font-medium p-5 bg-white rounded-lg shadow-md max-w-md mx-auto">
-          Pas de plaintes trouvées.
-        </div>
-      ) : (
-        <>
-          {/* Sorting Headers */}
-          <div className="grid gap-4 sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3 mb-4">
-            <div className="col-span-1 flex justify-center">
-              <button
-                onClick={() => handleSort("room_no")}
-                className="text-gray-700 font-semibold flex items-center gap-1 hover:text-blue-500"
+            Liste des Plaintes
+          </h2>
+          {comps.length === 0 ? (
+            <div className="text-center py-10">
+              <svg
+                className={darkMode ? "mx-auto h-12 w-12 text-gray-500" : "mx-auto h-12 w-12 text-gray-400"}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
               >
-                Numéro de chambre
-                {sortBy === "room_no" && (
-                  <span>{sortOrder === "asc" ? "↑" : "↓"}</span>
-                )}
-              </button>
-            </div>
-            <div className="col-span-1 flex justify-center">
-              <button
-                onClick={() => handleSort("complaints")}
-                className="text-gray-700 font-semibold flex items-center gap-1 hover:text-blue-500"
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
+              </svg>
+              <h3
+                className={darkMode ? "mt-2 text-lg font-medium text-gray-300" : "mt-2 text-lg font-medium text-gray-900"}
               >
-                Plainte
-                {sortBy === "complaints" && (
-                  <span>{sortOrder === "asc" ? "↑" : "↓"}</span>
-                )}
-              </button>
+                Aucune plainte trouvée
+              </h3>
+              <p className={darkMode ? "mt-1 text-gray-400" : "mt-1 text-gray-500"}>
+                Commencez par ajouter une nouvelle plainte.
+              </p>
             </div>
-            <div className="col-span-1 flex justify-center">
-              <span className="text-gray-700 font-semibold">Action</span>
-            </div>
-          </div>
-
-          {/* Complaints Grid */}
-          <AnimatePresence>
-            <div className="grid gap-4 sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
-              {paginatedComplaints.map((ele, index) => (
-                <motion.div
-                  key={index + 1}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  transition={{ duration: 0.3 }}
-                  className="border-2 border-gray-200 rounded-lg p-5 bg-white shadow-md flex flex-col items-center justify-center hover:shadow-xl transition-shadow duration-300"
-                >
-                  <div className="mb-2">
-                    <h1 className="text-center text-xl font-semibold text-[#07074D]">
-                      Chambre {ele.room_no}
-                    </h1>
-                    <h2 className="text-center text-sm text-gray-500">
-                      Numéro de chambre
-                    </h2>
-                  </div>
-                  <div className="mb-4">
-                    <h2 className="text-center text-lg font-medium text-gray-800">
-                      {ele.complaints}
-                    </h2>
-                    <h1 className="text-center text-sm text-gray-500">Plainte</h1>
-                  </div>
-                  <button
-                    onClick={() => handleResolveComplaint(ele.room_no)}
-                    disabled={ele.resolved}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-md text-white transition-all duration-300 ${
-                      ele.resolved
-                        ? "bg-gray-400 cursor-not-allowed"
-                        : "bg-green-500 hover:bg-green-600"
+          ) : (
+            comps.map((ele, index) => {
+              return (
+                ele.complaints &&
+                ele.room_no && (
+                  <div
+                    key={index + 1}
+                    className={`border-2 my-3 p-5 flex justify-evenly rounded-lg shadow-sm transition-all duration-300 ${
+                      darkMode ? "border-gray-700" : "border-gray-200"
                     }`}
                   >
-                    <FaCheckCircle />
-                    {ele.resolved ? "Résolu" : "Résoudre"}
-                  </button>
-                </motion.div>
-              ))}
-            </div>
-          </AnimatePresence>
-
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="flex justify-center mt-6">
-              <div className="flex gap-2">
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-                  <button
-                    key={page}
-                    onClick={() => handlePageChange(page)}
-                    className={`px-4 py-2 rounded-md ${
-                      currentPage === page
-                        ? "bg-blue-500 text-white"
-                        : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-                    } transition-all duration-300`}
-                  >
-                    {page}
-                  </button>
-                ))}
-              </div>
-            </div>
+                    <div className="mx-3">
+                      <h1
+                        className={`text-center font-semibold text-lg ${
+                          darkMode ? "text-gray-200" : "text-gray-800"
+                        }`}
+                      >
+                        {ele.room_no}
+                      </h1>
+                      <h2
+                        className={`capitalize text-center text-base ${
+                          darkMode ? "text-gray-400" : "text-gray-500"
+                        }`}
+                      >
+                        Numéro de chambre
+                      </h2>
+                    </div>
+                    <div className="mx-3">
+                      <h2
+                        className={`text-center font-semibold text-lg ${
+                          darkMode ? "text-gray-200" : "text-gray-800"
+                        }`}
+                      >
+                        {ele.complaints}
+                      </h2>
+                      <h1
+                        className={`capitalize text-center text-base ${
+                          darkMode ? "text-gray-400" : "text-gray-500"
+                        }`}
+                      >
+                        Plaintes
+                      </h1>
+                    </div>
+                    <div className="mx-3 flex justify-center items-center text-red-500">
+                      <MdDeleteForever
+                        className="cursor-pointer text-2xl"
+                        onClick={() => {
+                          deleteComplaints(ele.room_no);
+                        }}
+                      />
+                    </div>
+                  </div>
+                )
+              );
+            })
           )}
-        </>
-      )}
-    </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
-export default ComplaintsViewer;
+export default ComplaintsViewerOwner;

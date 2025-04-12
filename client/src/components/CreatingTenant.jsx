@@ -1,8 +1,11 @@
 import React, { useState, useRef, useEffect } from "react";
 import axios from "axios";
 import { toast } from "react-toastify";
+import { useTheme } from "../context/ThemeContext";
+import { FaSyncAlt } from "react-icons/fa";
 
 function CreatingTenant() {
+  const { darkMode } = useTheme();
   const nameEl = useRef(null);
   const ageEl = useRef(null);
   const dobEl = useRef(null);
@@ -23,7 +26,6 @@ function CreatingTenant() {
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState({});
 
-  // Validate form fields in real-time
   useEffect(() => {
     const newErrors = {};
     if (name && !/^[a-zA-Z\s]+$/.test(name)) {
@@ -49,7 +51,7 @@ function CreatingTenant() {
         newErrors.leaveDate = "La date de sortie ne peut pas être dans le passé";
       }
     }
-    if (ID && (!/^\d{9}$/.test(ID))) {
+    if (ID && !/^\d{9}$/.test(ID)) {
       newErrors.ID = "Le numéro de carte d'identité doit contenir exactement 9 chiffres";
     }
     if (pass && pass.length < 6) {
@@ -58,7 +60,6 @@ function CreatingTenant() {
     setErrors(newErrors);
   }, [name, roomno, age, dob, leaveDate, ID, pass]);
 
-  // Calculate age from DOB
   useEffect(() => {
     if (dob) {
       const dobDate = new Date(dob);
@@ -70,9 +71,8 @@ function CreatingTenant() {
       }
       setAge(calculatedAge.toString());
     }
-  }, [dob]); // Added 'dob' to the dependency array
+  }, [dob]);
 
-  // Calculate DOB from age
   useEffect(() => {
     if (age && !dob) {
       const parsedAge = parseInt(age);
@@ -150,199 +150,215 @@ function CreatingTenant() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[550px] my-5 p-5 bg-white rounded-lg shadow-md">
-      <form onSubmit={submitHandler} action="" method="POST">
-        <div className="mb-5">
-          <label
-            htmlFor="name"
-            className="mb-1 block text-base font-medium text-[#07074D]"
-          >
-            Nom complet
-          </label>
-          <input
-            type="text"
-            ref={nameEl}
-            name="name"
-            id="name"
-            value={name}
-            placeholder="Nom complet"
-            onChange={(e) => setName(e.target.value)}
-            required
-            className="w-full rounded-md border border-[#e0e0e0] bg-white py-3 px-6 text-base font-medium text-[#6B7280] outline-none focus:border-[#6A64F1] focus:shadow-md"
-          />
-          {errors.name && <p className="text-red-500 text-sm mt-1">{errors.name}</p>}
-        </div>
-        <div className="mb-5">
-          <label
-            htmlFor="room-no"
-            className="mb-1 block text-base font-medium text-[#07074D]"
-          >
-            Numéro de chambre
-          </label>
-          <input
-            type="text"
-            ref={roomEl}
-            name="room-no"
-            id="room-no"
-            value={roomno}
-            placeholder="Numéro de chambre"
-            onChange={(e) => setRoomno(e.target.value)}
-            required
-            className="w-full rounded-md border border-[#e0e0e0] bg-white py-3 px-6 text-base font-medium text-[#6B7280] outline-none focus:border-[#6A64F1] focus:shadow-md"
-          />
-          {errors.roomno && <p className="text-red-500 text-sm mt-1">{errors.roomno}</p>}
-        </div>
-        <div className="mb-5 flex gap-5 flex-wrap">
-          <div>
+    <section className={`flex items-center justify-center h-screen w-screen transition-all duration-300 ${
+      darkMode ? "bg-gray-900" : "bg-gray-100"
+    }`}>
+      <div
+        className={`mx-auto w-full max-w-[550px] p-5 rounded-lg shadow-lg transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100`}
+      >
+        <form onSubmit={submitHandler} action="" method="POST">
+          <div className="mb-5">
             <label
-              htmlFor="dob"
-              className="mb-1 block text-base font-medium text-[#07074D]"
+              htmlFor="name"
+              className={`mb-1 block text-base font-medium text-gray-800 dark:text-gray-100`}
             >
-              Date de naissance
+              Nom complet
             </label>
             <input
-              type="date"
-              name="dob"
-              ref={dobEl}
-              value={dob}
+              type="text"
+              ref={nameEl}
+              name="name"
+              id="name"
+              value={name}
+              placeholder="Nom complet"
+              onChange={(e) => setName(e.target.value)}
+              required
+              className={`w-full rounded-md border py-3 px-6 text-base font-medium outline-none focus:border-[#6A64F1] focus:shadow-md transition-all duration-300 bg-white dark:bg-gray-600 text-gray-800 dark:text-gray-200 border-gray-300 dark:border-gray-500 ${errors.name ? "border-red-500" : ""}`}
+            />
+            {errors.name && <p className="text-red-500 dark:text-red-400 text-sm mt-1">{errors.name}</p>}
+          </div>
+          <div className="mb-5">
+            <label
+              htmlFor="room-no"
+              className={`mb-1 block text-base font-medium text-gray-800 dark:text-gray-100`}
+            >
+              Numéro de chambre
+            </label>
+            <input
+              type="text"
+              ref={roomEl}
+              name="room-no"
+              id="room-no"
+              value={roomno}
+              placeholder="Numéro de chambre"
+              onChange={(e) => setRoomno(e.target.value)}
+              required
+              className={`w-full rounded-md border py-3 px-6 text-base font-medium outline-none focus:border-[#6A64F1] focus:shadow-md transition-all duration-300 bg-white dark:bg-gray-600 text-gray-800 dark:text-gray-200 border-gray-300 dark:border-gray-500 ${errors.roomno ? "border-red-500" : ""}`}
+            />
+            {errors.roomno && <p className="text-red-500 dark:text-red-400 text-sm mt-1">{errors.roomno}</p>}
+          </div>
+          <div className="mb-5 flex gap-5 flex-wrap">
+            <div>
+              <label
+                htmlFor="dob"
+                className={`mb-1 block text-base font-medium text-gray-800 dark:text-gray-100`}
+              >
+                Date de naissance
+              </label>
+              <input
+                type="date"
+                name="dob"
+                ref={dobEl}
+                value={dob}
+                onChange={(e) => {
+                  setDob(e.target.value);
+                  setAge("");
+                }}
+                id="dob"
+                required
+                className={`w-60 rounded-md border py-3 px-6 text-base font-medium outline-none focus:border-[#6A64F1] focus:shadow-md transition-all duration-300 bg-white dark:bg-gray-600 text-gray-800 dark:text-gray-200 border-gray-300 dark:border-gray-500 ${errors.dob ? "border-red-500" : ""}`}
+              />
+              {errors.dob && <p className="text-red-500 dark:text-red-400 text-sm mt-1">{errors.dob}</p>}
+            </div>
+            <div>
+              <label
+                htmlFor="age"
+                className={`mb-1 block text-base font-medium text-gray-800 dark:text-gray-100`}
+              >
+                Âge
+              </label>
+              <input
+                type="number"
+                name="age"
+                ref={ageEl}
+                id="age"
+                value={age}
+                onChange={(e) => {
+                  setAge(e.target.value);
+                  setDob("");
+                }}
+                placeholder="Âge"
+                required
+                className={`w-20 rounded-md border py-3 px-6 text-base font-medium outline-none focus:border-[#6A64F1] focus:shadow-md transition-all duration-300 bg-white dark:bg-gray-600 text-gray-800 dark:text-gray-200 border-gray-300 dark:border-gray-500 ${errors.age ? "border-red-500" : ""}`}
+              />
+              {errors.age && <p className="text-red-500 dark:text-red-400 text-sm mt-1">{errors.age}</p>}
+            </div>
+          </div>
+          <div className="mb-5 flex gap-5 flex-wrap">
+            <div>
+              <label
+                htmlFor="stat"
+                className={`mb-1 block text-base font-medium text-gray-800 dark:text-gray-100`}
+              >
+                Statut
+              </label>
+              <select
+                name="stat"
+                ref={statEl}
+                id="stat"
+                value={stat}
+                onChange={(e) => setStat(e.target.value)}
+                required
+                className={`w-60 rounded-md border py-3 px-6 text-base font-medium outline-none focus:border-[#6A64F1] focus:shadow-md transition-all duration-300 bg-white dark:bg-gray-600 text-gray-800 dark:text-gray-200 border-gray-300 dark:border-gray-500`}
+              >
+                <option value="">Sélectionnez le statut</option>
+                <option value="Non payé">Non payé</option>
+                <option value="Payé">Payé</option>
+              </select>
+            </div>
+            <div>
+              <label
+                htmlFor="leaveDate"
+                className={`mb-1 block text-base font-medium text-gray-800 dark:text-gray-100`}
+              >
+                Date de sortie
+              </label>
+              <input
+                type="date"
+                name="leaveDate"
+                ref={leaveDateEl}
+                value={leaveDate}
+                onChange={(e) => setLeaveDate(e.target.value)}
+                id="leaveDate"
+                className={`w-60 rounded-md border py-3 px-6 text-base font-medium outline-none focus:border-[#6A64F1] focus:shadow-md transition-all duration-300 bg-white dark:bg-gray-600 text-gray-800 dark:text-gray-200 border-gray-300 dark:border-gray-500 ${errors.leaveDate ? "border-red-500" : ""}`}
+              />
+              {errors.leaveDate && <p className="text-red-500 dark:text-red-400 text-sm mt-1">{errors.leaveDate}</p>}
+            </div>
+          </div>
+          <div className="mb-5">
+            <label
+              htmlFor="ID"
+              className={`mb-1 block text-base font-medium text-gray-800 dark:text-gray-100`}
+            >
+              Numéro carte identité
+            </label>
+            <input
+              type="text"
+              name="ID"
+              ref={IDEl}
+              id="ID"
+              value={ID}
               onChange={(e) => {
-                setDob(e.target.value);
-                setAge("");
+                const value = e.target.value.replace(/\D/g, "");
+                if (value.length <= 9) {
+                  setID(value);
+                }
               }}
-              id="dob"
+              placeholder="Numéro carte identité (9 chiffres)"
               required
-              className="w-60 rounded-md border border-[#e0e0e0] bg-white py-3 px-6 text-base font-medium text-[#6B7280] outline-none focus:border-[#6A64F1] focus:shadow-md"
+              className={`w-full rounded-md border py-3 px-6 text-base font-medium outline-none focus:border-[#6A64F1] focus:shadow-md transition-all duration-300 bg-white dark:bg-gray-600 text-gray-800 dark:text-gray-200 border-gray-300 dark:border-gray-500 ${errors.ID ? "border-red-500" : ""}`}
             />
-            {errors.dob && <p className="text-red-500 text-sm mt-1">{errors.dob}</p>}
+            {errors.ID && <p className="text-red-500 dark:text-red-400 text-sm mt-1">{errors.ID}</p>}
           </div>
-          <div>
+          <div className="mb-5">
             <label
-              htmlFor="age"
-              className="mb-1 block text-base font-medium text-[#07074D]"
+              htmlFor="pass"
+              className={`mb-1 block text-base font-medium text-gray-800 dark:text-gray-100`}
             >
-              Âge
+              Mot de passe
             </label>
             <input
-              type="number"
-              name="age"
-              ref={ageEl}
-              id="age"
-              value={age}
-              onChange={(e) => {
-                setAge(e.target.value);
-                setDob("");
-              }}
-              placeholder="Âge"
+              type="password"
+              name="pass"
+              ref={passEl}
+              value={pass}
+              onChange={(e) => setPass(e.target.value)}
+              id="pass"
+              placeholder="Entrez votre mot de passe (min 6 caractères)"
               required
-              className="w-20 rounded-md border border-[#e0e0e0] bg-white py-3 px-6 text-base font-medium text-[#6B7280] outline-none focus:border-[#6A64F1] focus:shadow-md"
+              className={`w-full rounded-md border py-3 px-6 text-base font-medium outline-none focus:border-[#6A64F1] focus:shadow-md transition-all duration-300 bg-white dark:bg-gray-600 text-gray-800 dark:text-gray-200 border-gray-300 dark:border-gray-500 ${errors.pass ? "border-red-500" : ""}`}
             />
-            {errors.age && <p className="text-red-500 text-sm mt-1">{errors.age}</p>}
+            {errors.pass && <p className="text-red-500 dark:text-red-400 text-sm mt-1">{errors.pass}</p>}
           </div>
-        </div>
-        <div className="mb-5 flex gap-5 flex-wrap">
-          <div>
-            <label
-              htmlFor="stat"
-              className="mb-1 block text-base font-medium text-[#07074D]"
+          <div className="flex w-full gap-4 justify-center">
+            <button
+              type="submit"
+              disabled={loading}
+              className={`py-3 px-8 rounded-md transition-all duration-300 flex items-center justify-center gap-2 ${
+                loading
+                  ? "bg-gray-500 cursor-not-allowed"
+                  : darkMode
+                  ? "bg-blue-600 text-white hover:bg-blue-700"
+                  : "bg-blue-500 text-white hover:bg-blue-600"
+              }`}
             >
-              Statut
-            </label>
-            <select
-              name="stat"
-              ref={statEl}
-              id="stat"
-              value={stat}
-              onChange={(e) => setStat(e.target.value)}
-              required
-              className="w-60 rounded-md border border-[#e0e0e0] bg-white py-3 px-6 text-base font-medium text-[#6B7280] outline-none focus:border-[#6A64F1] focus:shadow-md"
+              {loading ? <FaSyncAlt className="animate-spin" /> : "Soumettre"}
+            </button>
+            <button
+              type="button"
+              onClick={handleReset}
+              className={`py-3 px-8 rounded-md transition-all duration-300 ${
+                darkMode
+                  ? "bg-gray-600 text-gray-200 hover:bg-gray-700"
+                  : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+              }`}
             >
-              <option value="">Sélectionnez le statut</option>
-              <option value="Non payé">Non payé</option>
-              <option value="Payé">Payé</option>
-            </select>
+              Réinitialiser
+            </button>
           </div>
-          <div>
-            <label
-              htmlFor="leaveDate"
-              className="mb-1 block text-base font-medium text-[#07074D]"
-            >
-              Date de sortie
-            </label>
-            <input
-              type="date"
-              name="leaveDate"
-              ref={leaveDateEl}
-              value={leaveDate}
-              onChange={(e) => setLeaveDate(e.target.value)}
-              id="leaveDate"
-              className="w-60 rounded-md border border-[#e0e0e0] bg-white py-3 px-6 text-base font-medium text-[#6B7280] outline-none focus:border-[#6A64F1] focus:shadow-md"
-            />
-            {errors.leaveDate && <p className="text-red-500 text-sm mt-1">{errors.leaveDate}</p>}
-          </div>
-        </div>
-        <div className="mb-5">
-          <label
-            htmlFor="ID"
-            className="mb-1 block text-base font-medium text-[#07074D]"
-          >
-            Numéro carte identité
-          </label>
-          <input
-            type="text"
-            name="ID"
-            ref={IDEl}
-            id="ID"
-            value={ID}
-            onChange={(e) => {
-              const value = e.target.value.replace(/\D/g, ""); // Allow only digits
-              if (value.length <= 9) {
-                setID(value);
-              }
-            }}
-            placeholder="Numéro carte identité (9 chiffres)"
-            required
-            className="w-full rounded-md border border-[#e0e0e0] bg-white py-3 px-6 text-base font-medium text-[#6B7280] outline-none focus:border-[#6A64F1] focus:shadow-md"
-          />
-          {errors.ID && <p className="text-red-500 text-sm mt-1">{errors.ID}</p>}
-        </div>
-        <div className="mb-5">
-          <label
-            htmlFor="pass"
-            className="mb-1 block text-base font-medium text-[#07074D]"
-          >
-            Mot de passe
-          </label>
-          <input
-            type="password"
-            name="pass"
-            ref={passEl}
-            value={pass}
-            onChange={(e) => setPass(e.target.value)}
-            id="pass"
-            placeholder="Entrez votre mot de passe (min 6 caractères)"
-            required
-            className="w-full rounded-md border border-[#e0e0e0] bg-white py-3 px-6 text-base font-medium text-[#6B7280] outline-none focus:border-[#6A64F1] focus:shadow-md"
-          />
-          {errors.pass && <p className="text-red-500 text-sm mt-1">{errors.pass}</p>}
-        </div>
-        <div className="flex w-full gap-4 justify-center">
-          <button
-            type="submit"
-            disabled={loading}
-            className={`py-3 px-8 text-white bg-blue-500 rounded-md focus:bg-blue-600 focus:outline-none hover:bg-white hover:text-blue-500 transition-all duration-300 hover:border-blue-500 border-transparent border-2 ${loading ? "opacity-50 cursor-not-allowed" : ""}`}
-          >
-            {loading ? "Création..." : "Soumettre"}
-          </button>
-          <button
-            type="button"
-            onClick={handleReset}
-            className="py-3 px-8 text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300 focus:outline-none transition-all duration-300"
-          >
-            Réinitialiser
-          </button>
-        </div>
-      </form>
-    </div>
+        </form>
+      </div>
+    </section>
   );
 }
 

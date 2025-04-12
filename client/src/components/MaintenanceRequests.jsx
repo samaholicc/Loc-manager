@@ -4,11 +4,12 @@ import { FaWrench } from "react-icons/fa";
 import { motion } from "framer-motion";
 import { toast } from "react-toastify";
 import { Link } from "react-router-dom";
+import { useTheme } from "../context/ThemeContext"; // Import ThemeContext
 
 function MaintenanceRequests() {
+  const { darkMode } = useTheme(); // Access darkMode state
   const [maintenanceRequests, setMaintenanceRequests] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [darkMode] = useState(false);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
 
@@ -26,7 +27,7 @@ function MaintenanceRequests() {
         userId,
         userType: whom,
         page: pageNum,
-        all: true, // Indicate that we want all requests (with pagination)
+        all: true,
       });
       console.log("Maintenance Requests Response:", response.data);
       return response.data;
@@ -42,11 +43,11 @@ function MaintenanceRequests() {
       setLoading(true);
       const data = await fetchMaintenanceRequests(page);
       setMaintenanceRequests((prev) => (page === 1 ? data : [...prev, ...data]));
-      setHasMore(data.length === 10); // Assuming 10 items per page; adjust based on backend
+      setHasMore(data.length === 10);
       setLoading(false);
     };
     loadRequests();
-  }, [page, fetchMaintenanceRequests]); // Removed fetchMaintenanceRequests from dependency array to prevent infinite loop
+  }, [page, fetchMaintenanceRequests]);
 
   const handleScroll = useCallback(() => {
     if (
@@ -87,11 +88,15 @@ function MaintenanceRequests() {
         </div>
         {loading && page === 1 ? (
           <div className="animate-pulse flex flex-col gap-4">
-            <div className="h-10 bg-gray-200 rounded"></div>
-            <div className="h-32 bg-gray-200 rounded-lg"></div>
+            <div
+              className={darkMode ? "h-10 bg-gray-700 rounded" : "h-10 bg-gray-200 rounded"}
+            ></div>
+            <div
+              className={darkMode ? "h-32 bg-gray-700 rounded-lg" : "h-32 bg-gray-200 rounded-lg"}
+            ></div>
           </div>
         ) : maintenanceRequests.length === 0 ? (
-          <p className="text-gray-500">Aucune demande de maintenance.</p>
+          <p className={darkMode ? "text-gray-400" : "text-gray-500"}>Aucune demande de maintenance.</p>
         ) : (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -114,6 +119,8 @@ function MaintenanceRequests() {
                           ? "text-blue-500"
                           : request.status?.toLowerCase() === "resolved"
                           ? "text-green-500"
+                          : darkMode
+                          ? "text-gray-400"
                           : "text-gray-400"
                       }`}
                     >
@@ -125,7 +132,7 @@ function MaintenanceRequests() {
                         ? "Résolu"
                         : "Inconnu"}
                     </span>
-                    <span className="text-xs text-gray-400">
+                    <span className={darkMode ? "text-xs text-gray-500" : "text-xs text-gray-400"}>
                       {new Date(request.submitted_at).toLocaleString()}
                     </span>
                   </div>

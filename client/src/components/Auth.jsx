@@ -84,7 +84,7 @@ function Auth() {
         <div className="container mx-auto z-50">
           <div className="max-w-md mx-auto my-10 bg-blue-100 p-2 rounded-md shadow-md">
             <div className="text-center">
-              <h1 className="my-3 text-3xl font-semibold text-gray-700">Mittal High</h1>
+              <h1 className="my-3 text-3xl font-semibold text-gray-700">LocManager</h1>
             </div>
             <div className="m-7">
               <form onSubmit={submitHandler}>

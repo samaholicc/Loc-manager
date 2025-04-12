@@ -1,12 +1,14 @@
 import axios from "axios";
 import React, { useContext, useState, useEffect, useCallback, useRef } from "react";
 import { HamContext } from "../HamContextProvider";
+import { useTheme } from "../context/ThemeContext";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   FaSyncAlt, FaMoon, FaSun, FaChevronDown, FaChevronUp, FaExclamationCircle,
   FaUser, FaBell, FaCloudSun, FaUsers, FaExclamationTriangle, FaMoneyBillWave,
   FaPlus, FaFileAlt, FaCheck, FaEye, FaCar, FaWrench, FaFilter, FaDownload,
-  FaLink, FaBook, FaHeadset, FaUserPlus, FaSignInAlt, FaServer, FaChartLine, FaBriefcase
+  FaLink, FaBook, FaHeadset, FaUserPlus, FaSignInAlt, FaServer, FaChartLine, FaBriefcase,
+  FaEnvelope, FaPaperPlane, FaInfoCircle, FaExclamation, FaDollarSign
 } from "react-icons/fa";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
@@ -14,14 +16,14 @@ import { Chart, LineController, LineElement, PointElement, LinearScale, Category
 
 Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, PieController, ArcElement);
 
-function Dashboard(props) {
+function Dashboard({ navItems, basePath }) {
   const { hamActive, hamHandler } = useContext(HamContext);
   const navigate = useNavigate();
+  const { darkMode } = useTheme();
   const [forBox, setForBox] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showRules, setShowRules] = useState(false);
-  const [darkMode, setDarkMode] = useState(false);
   const [userName, setUserName] = useState("Utilisateur");
   const [userDetails, setUserDetails] = useState(null);
   const [recentActivities, setRecentActivities] = useState([]);
@@ -46,7 +48,19 @@ function Dashboard(props) {
   const userDistributionChartRef = useRef(null);
   const canvasRef = useRef(null);
 
-  // Initialize with default objects to prevent undefined errors
+  // Email writer state for employee
+  const [emailForm, setEmailForm] = useState({
+    recipientType: "",
+    recipientId: "",
+    subject: "",
+    message: "",
+  });
+  const [users, setUsers] = useState([]);
+  const [emailSending, setEmailSending] = useState(false);
+
+  const userType = JSON.parse(window.localStorage.getItem("whom"))?.userType || "";
+  const userId = JSON.parse(window.localStorage.getItem("whom"))?.username || "";
+
   const [systemStatus, setSystemStatus] = useState({
     uptime: "0%",
     activeUsers: 0,
@@ -59,6 +73,18 @@ function Dashboard(props) {
   });
   const [statsLoading, setStatsLoading] = useState(true);
   const [statsError, setStatsError] = useState(null);
+
+  // Tenant-specific state
+  const [tenantPaymentStatus, setTenantPaymentStatus] = useState(null);
+
+  // Owner-specific state
+  const [tenantOverview, setTenantOverview] = useState({ totalTenants: 0, activeLeases: 0 });
+
+  // Employee-specific state
+  const [pendingTasks, setPendingTasks] = useState([]);
+
+  // Admin-specific state
+  const [systemAlerts, setSystemAlerts] = useState([]); // Ensure initial state is an array
 
   const rules = [
     "Les résidents sont invités à prendre soin des lieux et à signaler sans délai tout problème ou anomalie.",
@@ -96,11 +122,18 @@ function Dashboard(props) {
     { name: "Portail de gestion", icon: <FaLink />, url: "https://example.com" },
   ];
 
-  // Helper function to render a compact placeholder for empty sections
   const renderEmptyPlaceholder = (message) => (
-    <div className="text-center text-gray-500 text-sm py-2">
+    <div className="text-center text-gray-500 dark:text-gray-400 text-sm py-2">
       <FaExclamationCircle className="inline-block mr-1" />
       {message}
+    </div>
+  );
+
+  const renderSkeletonLoader = () => (
+    <div className="animate-pulse space-y-4">
+      <div className="h-6 bg-gray-200 dark:bg-gray-600 rounded w-3/4"></div>
+      <div className="h-4 bg-gray-200 dark:bg-gray-600 rounded w-1/2"></div>
+      <div className="h-4 bg-gray-200 dark:bg-gray-600 rounded w-2/3"></div>
     </div>
   );
 
@@ -131,16 +164,8 @@ function Dashboard(props) {
       console.error("Error fetching system status or quick stats:", error);
       toast.error("Erreur lors de la récupération des statistiques du système.");
       setStatsError("Impossible de charger les statistiques. Veuillez réessayer.");
-      setSystemStatus({
-        uptime: "0%",
-        activeUsers: 0,
-        alerts: 0,
-      });
-      setQuickStats({
-        totalLoginsToday: 0,
-        totalComplaintsFiled: 0,
-        pendingRequests: 0,
-      });
+      setSystemStatus({ uptime: "0%", activeUsers: 0, alerts: 0 });
+      setQuickStats({ totalLoginsToday: 0, totalComplaintsFiled: 0, pendingRequests: 0 });
     } finally {
       setStatsLoading(false);
     }
@@ -170,18 +195,88 @@ function Dashboard(props) {
   const fetchRequests = useCallback(async () => {
     try {
       const data = await fetchMaintenanceRequests();
-      const uniqueRequests = Array.from(
-        new Map(data.map((item) => [item.id, item])).values()
-      );
+      const uniqueRequests = Array.from(new Map(data.map((item) => [item.id, item])).values());
       setMaintenanceRequests(uniqueRequests);
     } catch (error) {
       console.error("Error in fetchRequests:", error);
     }
   }, [fetchMaintenanceRequests]);
 
+  const fetchUsersForMessaging = useCallback(async () => {
+    try {
+      const response = await axios.get(`${process.env.REACT_APP_SERVER}/usersformessaging`);
+      setUsers(response.data);
+    } catch (error) {
+      console.error("Error fetching users for messaging:", error.response?.data || error.message);
+      toast.error("Erreur lors de la récupération des utilisateurs pour la messagerie.");
+      setUsers([]);
+    }
+  }, []);
+
+  const fetchTenantPaymentStatus = useCallback(async () => {
+    if (userType !== "tenant") return;
+    try {
+      const response = await axios.post(`${process.env.REACT_APP_SERVER}/paymentstatus`, { userId });
+      setTenantPaymentStatus(response.data);
+    } catch (error) {
+      console.error("Error fetching tenant payment status:", error.response?.data || error.message);
+      toast.error("Erreur lors de la récupération du statut de paiement.");
+    }
+  }, [userType, userId]);
+
+  const fetchTenantOverview = useCallback(async () => {
+    if (userType !== "owner") return;
+    try {
+      const response = await axios.post(`${process.env.REACT_APP_SERVER}/tenantoverview`, { userId });
+      setTenantOverview({
+        totalTenants: response.data.totalTenants || 0,
+        activeLeases: response.data.activeLeases || 0,
+      });
+    } catch (error) {
+      console.error("Error fetching tenant overview:", error.response?.data || error.message);
+      toast.error("Erreur lors de la récupération de l'aperçu des locataires.");
+    }
+  }, [userType, userId]);
+
+  const fetchPendingTasks = useCallback(async () => {
+    if (userType !== "employee") return;
+    try {
+      const response = await axios.post(`${process.env.REACT_APP_SERVER}/pendingtasks`, { userId });
+      setPendingTasks(response.data || []);
+    } catch (error) {
+      console.error("Error fetching pending tasks:", error.response?.data || error.message);
+      toast.error("Erreur lors de la récupération des tâches en attente.");
+    }
+  }, [userType, userId]);
+
+  const fetchSystemAlerts = useCallback(async () => {
+    if (userType !== "admin") return;
+    try {
+      const response = await axios.get(`${process.env.REACT_APP_SERVER}/systemalerts`);
+      setSystemAlerts(Array.isArray(response.data) ? response.data : []);
+    } catch (error) {
+      console.error("Error fetching system alerts:", error.response?.data || error.message);
+      toast.error("Erreur lors de la récupération des alertes système.");
+      setSystemAlerts([]);
+    }
+  }, [userType]);
+
   useEffect(() => {
     fetchRequests();
-  }, [fetchRequests]);
+    if (userType === "employee") {
+      fetchUsersForMessaging();
+      fetchPendingTasks();
+    }
+    if (userType === "tenant") {
+      fetchTenantPaymentStatus();
+    }
+    if (userType === "owner") {
+      fetchTenantOverview();
+    }
+    if (userType === "admin") {
+      fetchSystemAlerts();
+    }
+  }, [fetchRequests, fetchUsersForMessaging, fetchPendingTasks, fetchTenantPaymentStatus, fetchTenantOverview, fetchSystemAlerts, userType]);
 
   const getBoxInfo = async () => {
     setLoading(true);
@@ -210,7 +305,7 @@ function Dashboard(props) {
         whom === "admin" && adminId
           ? axios.post(`${process.env.REACT_APP_SERVER}/block_admin`, { admin_id: adminId })
           : Promise.resolve({ data: { admin_name: "Inconnu", block_no: "N/A" } }),
-        whom === "owner"
+        ["owner", "tenant"].includes(whom)
           ? axios.post(`${process.env.REACT_APP_SERVER}/ownercomplaints`, { userId })
           : Promise.resolve({ data: [] }),
         whom === "tenant"
@@ -261,6 +356,12 @@ function Dashboard(props) {
           { label: "Nombre total de plaintes", value: dashboardRes.data.totalcomplaint || 0, icon: <FaExclamationTriangle /> },
           { label: "Salaire", value: "Euros " + (dashboardRes.data.salary || "0"), icon: <FaMoneyBillWave /> },
         ];
+        setUserDetails({
+          name: dashboardRes.data.emp_name || "Inconnu",
+          block_no: dashboardRes.data.block_no || "N/A",
+          block_name: dashboardRes.data.block_name || "Inconnu",
+        });
+        setUserName(dashboardRes.data.emp_name || "Utilisateur");
       } else if (whom === "tenant") {
         boxData = [
           { label: "ID locataire", value: dashboardRes.data[0]?.tenant_id ? `t-${dashboardRes.data[0].tenant_id}` : "N/A", icon: <FaUser /> },
@@ -293,7 +394,7 @@ function Dashboard(props) {
       setRecentActivities(activitiesRes.data);
       setFilteredActivities(activitiesRes.data);
       setNotifications(notificationsRes.data);
-      setComplaintSummary(complaintsRes.data.slice(0, 2));
+      setComplaintSummary(activitiesRes.data.slice(0, 2));
       setPaymentStatus(paymentRes.data);
     } catch (error) {
       console.error("Erreur lors de la récupération des données du tableau de bord:", error.response?.data || error.message);
@@ -326,6 +427,33 @@ function Dashboard(props) {
       toast.error("Erreur lors de la soumission de la demande : " + (error.response?.data?.error || error.message));
     } finally {
       setMaintenanceSubmitting(false);
+    }
+  };
+
+  const handleEmailSubmit = async (e) => {
+    e.preventDefault();
+    setEmailSending(true);
+    try {
+      const { recipientType, recipientId, subject, message } = emailForm;
+      if (!recipientType || !recipientId || !subject || !message) {
+        toast.error("Veuillez remplir tous les champs.");
+        return;
+      }
+
+      await axios.post(`${process.env.REACT_APP_SERVER}/sendmessage`, {
+        sender_id: userId.split("-")[1],
+        sender_type: userType,
+        receiver_id: recipientId,
+        receiver_type: recipientType,
+        subject,
+        message,
+      });
+      toast.success("Message envoyé avec succès");
+      setEmailForm({ recipientType: "", recipientId: "", subject: "", message: "" });
+    } catch (error) {
+      toast.error("Erreur lors de l'envoi du message : " + (error.response?.data?.error || error.message));
+    } finally {
+      setEmailSending(false);
     }
   };
 
@@ -366,6 +494,39 @@ function Dashboard(props) {
     setFilteredActivities(filtered);
   };
 
+  const markActivityAsRead = (index) => {
+    const updatedActivities = recentActivities.filter((_, i) => i !== index);
+    setRecentActivities(updatedActivities);
+    setFilteredActivities(updatedActivities);
+  };
+
+  const resolveAllComplaints = async () => {
+    try {
+      const unresolvedComplaints = complaintSummary.filter(complaint => !complaint.resolved);
+      await Promise.all(unresolvedComplaints.map(complaint =>
+        axios.post(`${process.env.REACT_APP_SERVER}/deletecomplaint`, { room_no: complaint.room_no })
+      ));
+      toast.success("Toutes les plaintes non résolues ont été résolues avec succès");
+      getBoxInfo();
+    } catch (error) {
+      toast.error("Erreur lors de la résolution des plaintes : " + (error.response?.data?.error || error.message));
+    }
+  };
+
+  const clearSystemAlerts = () => {
+    setSystemAlerts([]);
+    toast.success("Alertes système effacées avec succès");
+  };
+
+  const refreshAdminData = async () => {
+    await Promise.all([
+      fetchSystemStatusAndQuickStats(),
+      fetchSystemAlerts(),
+      getBoxInfo(),
+    ]);
+    toast.success("Données actualisées avec succès");
+  };
+
   useEffect(() => {
     let isMounted = true;
 
@@ -396,7 +557,7 @@ function Dashboard(props) {
       chartRef.current = null;
     }
 
-    if (JSON.parse(window.localStorage.getItem("whom"))?.userType === "owner" && complaintSummary.length > 0) {
+    if (["owner", "tenant"].includes(userType) && complaintSummary.length > 0) {
       const ctx = document.getElementById("complaintsChart")?.getContext("2d");
       if (ctx) {
         chartRef.current = new Chart(ctx, {
@@ -431,7 +592,7 @@ function Dashboard(props) {
         chartRef.current = null;
       }
     };
-  }, [complaintSummary, darkMode]);
+  }, [complaintSummary, darkMode, userType]);
 
   useEffect(() => {
     if (userDistributionChartRef.current) {
@@ -439,7 +600,7 @@ function Dashboard(props) {
       userDistributionChartRef.current = null;
     }
 
-    if (JSON.parse(window.localStorage.getItem("whom"))?.userType === "admin" && forBox.length > 0 && canvasRef.current) {
+    if (userType === "admin" && forBox.length > 0 && canvasRef.current) {
       const ctx = canvasRef.current.getContext("2d");
       if (ctx) {
         const chartData = [
@@ -532,11 +693,7 @@ function Dashboard(props) {
         userDistributionChartRef.current = null;
       }
     };
-  }, [forBox, darkMode]);
-
-  const toggleDarkMode = () => {
-    setDarkMode(!darkMode);
-  };
+  }, [forBox, darkMode, userType]);
 
   const toggleRules = () => {
     setShowRules(!showRules);
@@ -615,161 +772,72 @@ function Dashboard(props) {
       style={{
         filter: hamActive ? "blur(2px)" : "blur(0px)",
       }}
-      className={`min-h-screen w-full transition-all duration-300 flex flex-col ${
-        darkMode ? "bg-gray-900 text-gray-200" : "bg-gradient-to-br from-blue-50 to-gray-100 text-gray-800"
-      }`}
+      className="min-h-screen w-full transition-all duration-300 flex flex-col bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-100"
     >
-      {/* Header */}
-      <div className="flex justify-between items-center p-4 md:p-6">
-        <h1 className="text-2xl font-bold">Bienvenue, {userName} !</h1>
-        <div className="flex gap-2 items-center">
-          <button
-            onClick={getBoxInfo}
-            className={`flex items-center gap-1 px-3 py-1 rounded-md transition-all duration-300 text-sm ${
-              darkMode ? "bg-gray-700 text-white hover:bg-gray-600" : "bg-blue-500 text-white hover:bg-blue-600"
-            }`}
-            aria-label="Rafraîchir les données"
-          >
-            <FaSyncAlt className={loading ? "animate-spin" : ""} />
-            Rafraîchir
-          </button>
-          {["tenant", "owner", "admin"].includes(JSON.parse(window.localStorage.getItem("whom"))?.userType) && (
-            <div className="relative">
-              <button
-                onClick={toggleNotifications}
-                className={`p-1 rounded-full transition-all duration-300 relative ${
-                  darkMode ? "bg-gray-700 text-gray-200 hover:bg-gray-600" : "bg-gray-300 text-gray-700 hover:bg-gray-400"
-                }`}
-                aria-label="Notifications"
-              >
-                <FaBell size={16} />
-                {notifications.length > 0 && (
-                  <span className="absolute top-0 right-0 h-4 w-4 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                    {notifications.length}
-                  </span>
-                )}
-              </button>
-              {showNotifications && (
-                <motion.div
-                  initial={{ opacity: 0, y: -10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -10 }}
-                  className={`absolute right-0 mt-2 w-48 rounded-lg shadow-lg p-3 z-10 ${
-                    darkMode ? "bg-gray-800 text-gray-200" : "bg-white text-gray-800"
-                  }`}
-                >
-                  <h3 className="text-sm font-semibold mb-1">Notifications</h3>
-                  {notifications.length === 0 ? (
-                    <p className="text-xs text-gray-500">Aucune notification.</p>
-                  ) : (
-                    notifications.map((notif, index) => (
-                      <div key={index} className="text-xs mb-1 flex justify-between items-center">
-                        <div>
-                          <p>{notif.message}</p>
-                          <p className="text-xs text-gray-400">{new Date(notif.date).toLocaleString()}</p>
-                        </div>
-                        <button
-                          onClick={() => markNotificationAsRead(index)}
-                          className="text-green-500 hover:text-green-700"
-                          aria-label="Marquer comme lu"
-                        >
-                          <FaCheck size={12} />
-                        </button>
-                      </div>
-                    ))
-                  )}
-                </motion.div>
-              )}
-            </div>
-          )}
-          <button
-            onClick={toggleDarkMode}
-            className={`p-1 rounded-full transition-all duration-300 ${
-              darkMode ? "bg-yellow-400 text-gray-900 hover:bg-yellow-500" : "bg-gray-300 text-gray-700 hover:bg-gray-400"
-            }`}
-            aria-label={darkMode ? "Passer au mode clair" : "Passer au mode sombre"}
-          >
-            {darkMode ? <FaSun size={16} /> : <FaMoon size={16} />}
-          </button>
-          <button
-            onClick={() => {
-              window.localStorage.removeItem("whom");
-              navigate("/login");
-              toast.success("Déconnexion réussie.");
-            }}
-            className={`px-3 py-1 rounded-md text-sm transition-all duration-300 ${
-              darkMode ? "bg-red-600 text-white hover:bg-red-700" : "bg-red-500 text-white hover:bg-red-600"
-            }`}
-            aria-label="Déconnexion"
-          >
-            Déconnexion
-          </button>
-        </div>
-      </div>
-
       {/* Main Content */}
       {loading ? (
         <div className="flex justify-center items-center h-64">
           <div className="animate-pulse flex flex-col gap-4 w-full max-w-4xl mx-auto p-4">
-            <div className="h-10 bg-gray-200 rounded"></div>
+            <div className="h-10 bg-gray-200 dark:bg-gray-700 rounded"></div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="h-32 bg-gray-200 rounded-lg"></div>
-              <div className="h-32 bg-gray-200 rounded-lg"></div>
+              <div className="h-32 bg-gray-200 dark:bg-gray-700 rounded-lg"></div>
+              <div className="h-32 bg-gray-200 dark:bg-gray-700 rounded-lg"></div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="h-24 bg-gray-200 rounded-lg"></div>
-              <div className="h-24 bg-gray-200 rounded-lg"></div>
-              <div className="h-24 bg-gray-200 rounded-lg"></div>
+              <div className="h-24 bg-gray-200 dark:bg-gray-700 rounded-lg"></div>
+              <div className="h-24 bg-gray-200 dark:bg-gray-700 rounded-lg"></div>
+              <div className="h-24 bg-gray-200 dark:bg-gray-700 rounded-lg"></div>
             </div>
           </div>
         </div>
       ) : error ? (
-        <div className="text-center text-red-500 text-lg font-medium p-5 bg-white rounded-lg shadow-md max-w-md mx-auto">
+        <div className="text-center text-red-500 text-lg font-medium p-5 bg-white dark:bg-gray-800 rounded-lg shadow-md max-w-md mx-auto">
           <FaExclamationCircle className="inline-block mr-2" />
           {error}
           <button
             onClick={() => navigate("/login")}
-            className="ml-4 px-3 py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600"
+            className="ml-4 px-3 py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600 dark:hover:bg-blue-700"
             aria-label="Se connecter"
           >
             Se connecter
           </button>
         </div>
       ) : (
-        <div className="flex-1 flex flex-col p-4 md:p-6 gap-6">
-          {/* Top Row: Profile and Weather */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="flex-1 flex flex-col p-6 md:p-8 gap-8">
+          {/* Top Row: Profile and Weather (Common for All User Types) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5 }}
-              className={`rounded-lg shadow-lg p-4 flex items-center gap-3 transition-all duration-300 hover:shadow-xl ${
-                darkMode ? "bg-gray-800 text-gray-200" : "bg-white text-gray-800"
-              }`}
+              className="rounded-xl shadow-lg p-6 flex items-center gap-4 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
             >
               <div className="flex-shrink-0">
-                <FaUser className="text-3xl text-blue-500" />
+                <FaUser className="text-4xl text-blue-500" />
               </div>
               <div className="flex-1">
-                <h2 className="text-lg font-bold">Profil</h2>
-                <p className="text-sm">Nom: {userDetails?.name || "Inconnu"}</p>
-                <p className="text-sm">Rôle: {JSON.parse(window.localStorage.getItem("whom"))?.userType || "Inconnu"}</p>
-                {JSON.parse(window.localStorage.getItem("whom"))?.userType === "admin" ? (
-                  <p className="text-sm">Numéro du block: {userDetails?.block_no || "N/A"}</p>
-                ) : JSON.parse(window.localStorage.getItem("whom"))?.userType === "tenant" ? (
+                <h2 className="text-xl font-bold mb-2">Profil</h2>
+                <p className="text-base">Nom: {userDetails?.name || "Inconnu"}</p>
+                <p className="text-base">Rôle: {userType || "Inconnu"}</p>
+                {userType === "admin" ? (
+                  <p className="text-base">Numéro du block: {userDetails?.block_no || "N/A"}</p>
+                ) : userType === "tenant" ? (
                   <>
-                    <p className="text-sm">Numéro du block: {userDetails?.block_no || "N/A"}</p>
-                    <p className="text-sm">Nom du block: {userDetails?.block_name || "Inconnu"}</p>
+                    <p className="text-base">Numéro du block: {userDetails?.block_no || "N/A"}</p>
+                    <p className="text-base">Nom du block: {userDetails?.block_name || "Inconnu"}</p>
+                  </>
+                ) : userType === "employee" ? (
+                  <>
+                    <p className="text-base">Numéro du block: {userDetails?.block_no || "N/A"}</p>
+                    <p className="text-base">Nom du block: {userDetails?.block_name || "Inconnu"}</p>
                   </>
                 ) : (
-                  <p className="text-sm">Numéro de chambre: {userDetails?.room_no || "N/A"}</p>
+                  <p className="text-base">Numéro de chambre: {userDetails?.room_no || "N/A"}</p>
                 )}
               </div>
               <Link
-                to="/edit-profile"
-                className={`px-3 py-1 rounded-md text-sm transition-all duration-300 ${
-                  darkMode ? "bg-gray-700 text-white hover:bg-gray-600" : "bg-blue-500 text-white hover:bg-blue-600"
-                }`}
+                to={`/${userType}/edit-profile`}
+                className="px-4 py-2 rounded-md text-sm transition-all duration-300 bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
                 aria-label="Modifier le profil"
               >
                 Modifier le profil
@@ -780,20 +848,16 @@ function Dashboard(props) {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5 }}
-              className={`rounded-lg shadow-lg p-4 flex items-center gap-3 transition-all duration-300 hover:shadow-xl ${
-                darkMode ? "bg-gray-800 text-gray-200" : "bg-white text-gray-800"
-              }`}
+              className="rounded-xl shadow-lg p-6 flex items-center gap-4 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
             >
-              <FaCloudSun className="text-3xl text-blue-500" />
+              <FaCloudSun className="text-4xl text-blue-500" />
               <div className="flex-1">
-                <div className="flex items-center gap-2 mb-1">
-                  <h2 className="text-lg font-bold">Météo à</h2>
+                <div className="flex items-center gap-3 mb-3">
+                  <h2 className="text-xl font-bold">Météo à</h2>
                   <select
                     value={weatherCity}
                     onChange={(e) => setWeatherCity(e.target.value)}
-                    className={`rounded-md border py-1 px-2 text-sm transition-all duration-300 focus:ring-2 focus:ring-blue-500 ${
-                      darkMode ? "bg-gray-700 text-gray-200 border-gray-600 hover:bg-gray-600" : "bg-white text-gray-800 border-gray-300 hover:bg-gray-100"
-                    }`}
+                    className="rounded-md border py-1 px-3 text-base transition-all duration-300 focus:ring-2 focus:ring-blue-500 bg-white text-gray-800 border-gray-300 hover:bg-gray-100 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600 dark:hover:bg-gray-600"
                     aria-label="Sélectionner une ville pour la météo"
                   >
                     <option value="Paris">Paris</option>
@@ -803,26 +867,21 @@ function Dashboard(props) {
                   </select>
                   <button
                     onClick={fetchWeather}
-                    className={`p-1 rounded-full transition-all duration-300 ${
-                      darkMode ? "bg-gray-700 text-gray-200 hover:bg-gray-600" : "bg-gray-300 text-gray-700 hover:bg-gray-400"
-                    }`}
+                    className="p-2 rounded-full transition-all duration-300 bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 relative group"
                     aria-label="Rafraîchir la météo"
                   >
                     <FaSyncAlt className={weatherLoading ? "animate-spin" : ""} size={16} />
+                    <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-10 left-1/2 transform -translate-x-1/2">Rafraîchir</span>
                   </button>
                 </div>
                 {weatherLoading ? (
-                  <div className="space-y-2">
-                    <div className="h-4 bg-gray-200 rounded animate-pulse w-3/4"></div>
-                    <div className="h-4 bg-gray-200 rounded animate-pulse w-1/2"></div>
-                    <div className="h-4 bg-gray-200 rounded animate-pulse w-2/3"></div>
-                  </div>
+                  renderSkeletonLoader()
                 ) : weatherError ? (
                   <div className="text-sm text-red-500">
                     <p>{weatherError}</p>
                     <button
                       onClick={fetchWeather}
-                      className="mt-2 text-blue-500 hover:text-blue-700 transition-all duration-300"
+                      className="mt-2 text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300"
                       aria-label="Réessayer de charger la météo"
                     >
                       Réessayer
@@ -830,46 +889,35 @@ function Dashboard(props) {
                   </div>
                 ) : weather && weather.main && weather.weather ? (
                   <>
-                    <p className="text-sm">Température: {weather.main.temp}°C</p>
-                    <p className="text-sm">Condition: {weather.weather[0].description}</p>
-                    <p className="text-sm">Humidité: {weather.main.humidity}%</p>
-                    <p className="text-sm">Vitesse du vent: {weather.wind.speed} m/s</p>
+                    <p className="text-base">Température: {weather.main.temp}°C</p>
+                    <p className="text-base">Condition: {weather.weather[0].description}</p>
+                    <p className="text-base">Humidité: {weather.main.humidity}%</p>
+                    <p className="text-base">Vitesse du vent: {weather.wind.speed} m/s</p>
                   </>
                 ) : (
-                  <p className="text-sm">Aucune donnée météo disponible. Veuillez réessayer.</p>
+                  <p className="text-base">Aucune donnée météo disponible. Veuillez réessayer.</p>
                 )}
               </div>
             </motion.div>
           </div>
 
-          {/* Middle Row: Dashboard Cards, User Distribution Chart, User Statistics Summary, Quick Actions, System Status, Quick Stats Overview */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* Left Section: Dashboard Cards, User Distribution Chart, User Statistics Summary */}
-            <div className="md:col-span-2 flex flex-col gap-6">
-              {/* Dashboard Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+          {/* Middle Row: Layout Based on User Type */}
+          {userType === "tenant" && (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              {/* Dashboard Cards (2x2 Grid) */}
+              <div className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-8">
                 {forBox.map((ele, index) => (
                   <motion.div
                     key={index + 1}
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.5, delay: index * 0.1 }}
-                    className={`p-4 rounded-lg shadow-lg transform hover:-translate-y-1 transition-all duration-300 flex items-center gap-3 ${
-                      darkMode ? "bg-gray-800 text-gray-200" : "bg-white text-gray-800"
-                    } ${
-                      JSON.parse(window.localStorage.getItem("whom"))?.userType === "admin"
-                        ? "border-l-4 border-blue-500"
-                        : JSON.parse(window.localStorage.getItem("whom"))?.userType === "owner"
-                        ? "border-l-4 border-green-500"
-                        : JSON.parse(window.localStorage.getItem("whom"))?.userType === "employee"
-                        ? "border-l-4 border-yellow-500"
-                        : "border-l-4 border-purple-500"
-                    }`}
+                    className={`p-6 rounded-xl shadow-lg transform hover:-translate-y-1 transition-all duration-300 flex items-center gap-4 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 border-l-4 border-purple-500 w-full border border-gray-200 dark:border-gray-700`}
                   >
-                    <div className="text-2xl text-blue-500">{ele.icon}</div>
+                    <div className="text-3xl text-blue-500">{ele.icon}</div>
                     <div>
-                      <h1 className="font-bold text-xl">{ele.value}</h1>
-                      <p className="font-semibold text-xs uppercase text-gray-500 mt-1 tracking-wide">
+                      <h1 className="font-bold text-2xl">{ele.value}</h1>
+                      <p className="font-semibold text-sm uppercase text-gray-500 dark:text-gray-400 mt-2 tracking-wide">
                         {ele.label}
                       </p>
                     </div>
@@ -877,221 +925,128 @@ function Dashboard(props) {
                 ))}
               </div>
 
-              {/* User Distribution Chart and User Statistics Summary */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {JSON.parse(window.localStorage.getItem("whom"))?.userType === "admin" && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.5 }}
-                    className={`rounded-lg shadow-lg p-4 transition-all duration-300 hover:shadow-xl ${
-                      darkMode ? "bg-gray-800 text-gray-200" : "bg-white text-gray-800"
-                    } ${forBox.length === 0 ? "h-32" : "h-auto"}`}
-                  >
-                    <h2 className="text-lg font-bold mb-2">Répartition des Utilisateurs</h2>
-                    {forBox.length === 0 ? (
-                      renderEmptyPlaceholder("Aucune donnée d'utilisateur disponible.")
-                    ) : (
-                      <>
-                        <div className="flex justify-center">
-                          <div className="w-full h-64">
-                            <canvas ref={canvasRef} id="userDistributionChart"></canvas>
-                          </div>
-                        </div>
-                      
+              {/* Actions Rapides and Payment Status (Stacked) */}
+              <div className="flex flex-col gap-8">
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.5 }}
+                  className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                >
+                  <h2 className="text-xl font-bold mb-4 text-center">Actions Rapides</h2>
+                  <div className="flex flex-col gap-3">
+                    <button
+                      onClick={async () => {
+                        try {
+                          const userId = JSON.parse(window.localStorage.getItem("whom")).username;
+                          await axios.post(`${process.env.REACT_APP_SERVER}/paymaintanance`, { id: userId });
+                          toast.success("Paiement effectué avec succès");
+                          getBoxInfo();
+                          fetchTenantPaymentStatus();
+                        } catch (error) {
+                          toast.error("Erreur lors du paiement : " + (error.response?.data?.error || error.message));
+                        }
+                      }}
+                      className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-green-500 text-white hover:bg-green-600 dark:bg-green-600 dark:hover:bg-green-700"
+                      aria-label="Payer l'entretien"
+                    >
+                      <FaMoneyBillWave />
+                      Payer l'entretien
+                    </button>
+                    <Link
+                      to="/tenant/filecomplaint"
+                      className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-yellow-500 text-white hover:bg-yellow-600 dark:bg-yellow-600 dark:hover:bg-yellow-700"
+                      aria-label="Déposer une plainte"
+                    >
+                      <FaExclamationTriangle />
+                      Déposer une plainte
+                    </Link>
+                    <Link
+                      to="/tenant/bookslot"
+                      className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+                      aria-label="Réserver un emplacement de parking"
+                    >
+                      <FaCar />
+                      Réserver un emplacement de parking
+                    </Link>
+                    <Link
+                      to="/tenant/viewparking"
+                      className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+                      aria-label="Voir les emplacements de parking"
+                    >
+                      <FaEye />
+                      Voir les emplacements de parking
+                    </Link>
+                  </div>
+                </motion.div>
 
-                          <div className="mt-4">
-                          <table className="w-full text-sm border-separate border-spacing-y-1">
-                            <thead>
-                              <tr>
-                                <th className="text-left font-semibold">Type</th>
-                                <th className="text-right font-semibold">Nombre</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              <tr>
-                                <td>Propriétaires</td>
-                                <td className="text-right">{forBox[0].value}</td>
-                              </tr>
-                              <tr>
-                                <td>Locataires</td>
-                                <td className="text-right">{forBox[1].value}</td>
-                              </tr>
-                              <tr>
-                                <td>Employés</td>
-                                <td className="text-right">{forBox[2].value}</td>
-                              </tr>
-                            </tbody>
-                          </table>
-                        </div>
-                      </>
-                    )}
-                  </motion.div>
-                )}
-
-                {JSON.parse(window.localStorage.getItem("whom"))?.userType === "admin" && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.5 }}
-                    className={`rounded-lg shadow-lg p-4 transition-all duration-300 hover:shadow-xl border-l-4 border-blue-500 ${
-                      darkMode ? "bg-gray-800 text-gray-200" : "bg-white text-gray-800"
-                    } ${userStatsData.totalUsers === 0 ? "h-32" : "max-h-[440px] overflow-y-auto"}`}
-                  >
-                    <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
-                      <FaChartLine className="text-blue-500" />
-                      Résumé des Statistiques Utilisateurs
-                    </h2>
-                    {userStatsData.totalUsers === 0 ? (
-                      renderEmptyPlaceholder("Aucune statistique utilisateur disponible.")
-                    ) : (
-                      <div className="space-y-4">
-                        <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-300">
-                          <FaUsers className="text-blue-500 text-xl" />
-                          <div>
-                            <p className="text-sm font-semibold">Nombre total d'utilisateurs</p>
-                            <p className="text-lg font-bold">{userStatsData.totalUsers}</p>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-300">
-                          <FaUser className="text-green-500 text-xl" />
-                          <div>
-                            <p className="text-sm font-semibold">Âge moyen des propriétaires</p>
-                            <p className="text-lg font-bold">{userStatsData.averageOwnerAge} ans</p>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-300">
-                          <FaUser className="text-blue-500 text-xl" />
-                          <div>
-                            <p className="text-sm font-semibold">Âge moyen des locataires</p>
-                            <p className="text-lg font-bold">{userStatsData.averageTenantAge} ans</p>
-                          </div>
-                        </div>
-
-                        {userStatsData.averageEmployeeAge > 0 && (
-                          <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-300">
-                            <FaUser className="text-orange-500 text-xl" />
-                            <div>
-                              <p className="text-sm font-semibold">Âge moyen des employés</p>
-                              <p className="text-lg font-bold">{userStatsData.averageEmployeeAge} ans</p>
-                            </div>
-                          </div>
-                        )}
-
-                        <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-300">
-                          <FaUsers className="text-green-500 text-xl" />
-                          <div>
-                            <p className="text-sm font-semibold">Propriétaires actifs</p>
-                            <p className="text-lg font-bold">{userStatsData.activeOwners}</p>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-300">
-                          <FaUsers className="text-blue-500 text-xl" />
-                          <div>
-                            <p className="text-sm font-semibold">Locataires actifs</p>
-                            <p className="text-lg font-bold">{userStatsData.activeTenants}</p>
-                          </div>
-                        </div>
-
-                        {userStatsData.activeEmployees > 0 && (
-                          <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-300">
-                            <FaUsers className="text-orange-500 text-xl" />
-                            <div>
-                              <p className="text-sm font-semibold">Employés actifs</p>
-                              <p className="text-lg font-bold">{userStatsData.activeEmployees}</p>
-                            </div>
-                          </div>
-                        )}
-
-                        <div className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-300">
-                          <p className="text-sm font-semibold mb-2">Répartition des utilisateurs</p>
-                          <div className="flex items-center gap-3">
-                            <FaUser className="text-green-500 text-xl" />
-                            <p className="text-sm">Propriétaires: {userStatsData.ownerPercentage}%</p>
-                          </div>
-                          <div className="flex items-center gap-3 mt-2">
-                            <FaUser className="text-blue-500 text-xl" />
-                            <p className="text-sm">Locataires: {userStatsData.tenantPercentage}%</p>
-                          </div>
-                          <div className="flex items-center gap-3 mt-2">
-                            <FaUser className="text-orange-500 text-xl" />
-                            <p className="text-sm">Employés: {userStatsData.employeePercentage}%</p>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </motion.div>
-                )}
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.5 }}
+                  className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700 flex-1"
+                >
+                  <h2 className="text-xl font-bold mb-4 text-center">Statut de Paiement</h2>
+                  {tenantPaymentStatus ? (
+                    <div className="space-y-3">
+                      <p className="text-base flex items-center gap-2">
+                        <FaDollarSign className={`text-2xl ${tenantPaymentStatus.status === "overdue" ? "text-red-500" : "text-green-500"}`} />
+                        <span className="font-semibold">Statut:</span>
+                        <span className={tenantPaymentStatus.status === "overdue" ? "text-red-500" : "text-green-500"}>
+                          {tenantPaymentStatus.status === "overdue" ? "En retard" : "À jour"}
+                        </span>
+                      </p>
+                      {tenantPaymentStatus.status === "overdue" && (
+                        <p className="text-base">Montant dû: {tenantPaymentStatus.amountDue} €</p>
+                      )}
+                      <p className="text-base">Prochain paiement: {tenantPaymentStatus.nextPaymentDate || "N/A"}</p>
+                    </div>
+                  ) : (
+                    renderSkeletonLoader()
+                  )}
+                </motion.div>
               </div>
             </div>
+          )}
 
-            {/* Right Section: Quick Actions, System Status, Quick Stats Overview */}
-            <div className="flex flex-col gap-6">
-              {/* Quick Actions */}
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5 }}
-                className={`rounded-lg shadow-lg p-4 transition-all duration-300 hover:shadow-xl h-fit ${
-                  darkMode ? "bg-gray-800 text-gray-200" : "bg-white text-gray-800"
-                }`}
-              >
-                <h2 className="text-lg font-bold mb-2 text-center">Actions Rapides</h2>
-                <div className="flex flex-col gap-2">
-                  {JSON.parse(window.localStorage.getItem("whom"))?.userType === "admin" && (
-                    <>
-                      <Link
-                        to="/admin/tenantdetails"
-                        className={`p-2 h-10 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-sm ${
-                          darkMode ? "bg-gray-700 text-gray-200 hover:bg-gray-600" : "bg-blue-500 text-white hover:bg-blue-600"
-                        }`}
-                        aria-label="Voir les locataires"
-                      >
-                        <FaUsers />
-                        Voir les locataires
-                      </Link>
-                      <Link
-                        to="/admin/createowner"
-                        className={`p-2 h-10 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-sm ${
-                          darkMode ? "bg-gray-700 text-gray-200 hover:bg-gray-600" : "bg-blue-500 text-white hover:bg-blue-600"
-                        }`}
-                        aria-label="Créer un propriétaire"
-                      >
-                        <FaPlus />
-                        Créer un propriétaire
-                      </Link>
-                      <button
-                        onClick={exportUserData}
-                        className={`p-2 h-10 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-sm ${
-                          darkMode ? "bg-gray-700 text-gray-200 hover:bg-gray-600" : "bg-green-500 text-white hover:bg-green-600"
-                        }`}
-                        aria-label="Exporter les données"
-                      >
-                        <FaDownload />
-                        Exporter les données
-                      </button>
-                    </>
-                  )}
-                  {JSON.parse(window.localStorage.getItem("whom"))?.userType === "owner" && (
-                    <>
-                      <Link
-                        to="/owner/complaint"
-                        className={`p-2 h-10 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-sm ${
-                          darkMode ? "bg-gray-700 text-gray-200 hover:bg-gray-600" : "bg-blue-500 text-white hover:bg-blue-600"
-                        }`}
-                        aria-label="Voir les plaintes"
-                      >
-                        <FaFileAlt />
-                        Voir les plaintes
-                      </Link>
+          {userType === "owner" && (
+            <div className="flex-1 flex flex-col gap-8">
+              {/* Middle Row: Dashboard Cards, Actions, and Tenant Overview */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                {/* Dashboard Cards (1x2 Grid) */}
+                <div className="grid grid-cols-1 gap-8">
+                  {forBox.map((ele, index) => (
+                    <motion.div
+                      key={index + 1}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.5, delay: index * 0.1 }}
+                      className={`p-6 rounded-xl shadow-lg transform hover:-translate-y-1 transition-all duration-300 flex items-center gap-4 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 border-l-4 border-green-500 w-full border border-gray-200 dark:border-gray-700`}
+                    >
+                      <div className="text-3xl text-blue-500">{ele.icon}</div>
+                      <div>
+                        <h1 className="font-bold text-2xl">{ele.value}</h1>
+                        <p className="font-semibold text-sm uppercase text-gray-500 dark:text-gray-400 mt-2 tracking-wide">
+                          {ele.label}
+                        </p>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+
+                {/* Actions Rapides and Tenant Overview (Stacked) */}
+                <div className="flex flex-col gap-8">
+                  <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.5 }}
+                    className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                  >
+                    <h2 className="text-xl font-bold mb-4 text-center">Actions Rapides</h2>
+                    <div className="flex flex-col gap-3">
                       <Link
                         to="/owner/createtenant"
-                        className={`p-2 h-10 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-sm ${
-                          darkMode ? "bg-gray-700 text-gray-200 hover:bg-gray-600" : "bg-blue-500 text-white hover:bg-blue-600"
-                        }`}
+                        className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
                         aria-label="Créer un locataire"
                       >
                         <FaPlus />
@@ -1099,133 +1054,600 @@ function Dashboard(props) {
                       </Link>
                       <Link
                         to="/owner/tenantdetails"
-                        className={`p-2 h-10 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-sm ${
-                          darkMode ? "bg-gray-700 text-gray-200 hover:bg-gray-600" : "bg-blue-500 text-white hover:bg-blue-600"
-                        }`}
+                        className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
                         aria-label="Voir les locataires"
                       >
                         <FaUsers />
                         Voir les locataires
                       </Link>
-                    </>
-                  )}
-                  {JSON.parse(window.localStorage.getItem("whom"))?.userType === "tenant" && (
-                    <>
+                    </div>
+                  </motion.div>
+
+                  <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.5 }}
+                    className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                  >
+                    <h2 className="text-xl font-bold mb-4 text-center">Aperçu des Locataires</h2>
+                    {tenantOverview.totalTenants > 0 ? (
+                      <div className="space-y-3">
+                        <p className="text-base flex items-center gap-2">
+                          <FaUsers className="text-blue-500 text-2xl" />
+                          <span className="font-semibold">Total Locataires:</span> {tenantOverview.totalTenants}
+                        </p>
+                        <p className="text-base flex items-center gap-2">
+                          <FaFileAlt className="text-green-500 text-2xl" />
+                          <span className="font-semibold">Baux Actifs:</span> {tenantOverview.activeLeases}
+                        </p>
+                      </div>
+                    ) : (
+                      renderSkeletonLoader()
+                    )}
+                  </motion.div>
+                </div>
+              </div>
+
+              {/* Bottom Row: Recent Activities, Maintenance Requests, Complaint Summary */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                {/* Recent Activities */}
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.5 }}
+                  className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                >
+                  <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-xl font-bold">Activités Récentes</h2>
+                    <div className="flex items-center gap-2">
+                      <div className="relative group">
+                        <input
+                          type="date"
+                          value={activityFilterDate}
+                          onChange={(e) => {
+                            setActivityFilterDate(e.target.value);
+                            handleActivityFilter(e.target.value);
+                          }}
+                          className="p-2 border rounded text-sm focus:ring-2 focus:ring-blue-500 transition-all duration-300 bg-white text-gray-800 border-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"
+                          aria-label="Filtrer les activités par date"
+                        />
+                        <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-10 left-1/2 transform -translate-x-1/2">Filtrer par date</span>
+                      </div>
                       <button
-                        onClick={async () => {
-                          try {
-                            const userId = JSON.parse(window.localStorage.getItem("whom")).username;
-                            await axios.post(`${process.env.REACT_APP_SERVER}/paymaintanance`, { id: userId });
-                            toast.success("Paiement effectué avec succès");
-                            getBoxInfo();
-                          } catch (error) {
-                            toast.error("Erreur lors du paiement : " + (error.response?.data?.error || error.message));
-                          }
+                        onClick={() => {
+                          setActivityFilterDate("");
+                          handleActivityFilter("");
                         }}
-                        className={`p-2 h-10 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-sm ${
-                          darkMode ? "bg-gray-700 text-gray-200 hover:bg-gray-600" : "bg-green-500 text-white hover:bg-green-600"
-                        }`}
-                        aria-label="Payer l'entretien"
+                        className="p-2 rounded-full transition-all duration-300 bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 relative group"
+                        aria-label="Effacer le filtre"
                       >
-                        <FaMoneyBillWave />
-                        Payer l'entretien
+                        <FaFilter size={16} />
+                        <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-10 left-1/2 transform -translate-x-1/2">Effacer le filtre</span>
                       </button>
-                      <Link
-                        to="/tenant/filecomplaint"
-                        className={`p-2 h-10 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-sm ${
-                          darkMode ? "bg-gray-700 text-gray-200 hover:bg-gray-600" : "bg-yellow-500 text-white hover:bg-yellow-600"
-                        }`}
-                        aria-label="Déposer une plainte"
-                      >
-                        <FaExclamationTriangle />
-                        Déposer une plainte
-                      </Link>
-                      <Link
-                        to="/tenant/bookslot"
-                        className={`p-2 h-10 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-sm ${
-                          darkMode ? "bg-gray-700 text-gray-200 hover:bg-gray-600" : "bg-blue-500 text-white hover:bg-blue-600"
-                        }`}
-                        aria-label="Réserver un emplacement de parking"
-                      >
-                        <FaCar />
-                        Réserver un emplacement de parking
-                      </Link>
-                      <Link
-                        to="/tenant/viewparking"
-                        className={`p-2 h-10 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-sm ${
-                          darkMode ? "bg-gray-700 text-gray-200 hover:bg-gray-600" : "bg-blue-500 text-white hover:bg-blue-600"
-                        }`}
-                        aria-label="Voir les emplacements de parking"
-                      >
-                        <FaEye />
-                        Voir les emplacements de parking
-                      </Link>
+                    </div>
+                  </div>
+                  {filteredActivities.length === 0 ? (
+                    renderEmptyPlaceholder("Aucune activité récente.")
+                  ) : (
+                    <>
+                      <ul className="space-y-2">
+                        {(showAllActivities ? filteredActivities : filteredActivities.slice(0, 4)).map((activity, index) => (
+                          <li key={index} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
+                            <span>{activity.action}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-gray-400 dark:text-gray-500">
+                                {new Date(activity.date).toLocaleString()}
+                              </span>
+                              <button
+                                onClick={() => markActivityAsRead(index)}
+                                className="text-green-500 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300 transition-all duration-300 text-sm relative group"
+                                aria-label="Marquer comme lu"
+                              >
+                                <FaCheck />
+                                <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Marquer comme lu</span>
+                              </button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                      {filteredActivities.length > 4 && (
+                        <button
+                          onClick={() => setShowAllActivities(!showAllActivities)}
+                          className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 text-sm mt-3"
+                          aria-label={showAllActivities ? "Afficher moins d'activités" : "Afficher plus d'activités"}
+                        >
+                          {showAllActivities ? "Afficher moins" : "Afficher plus"}
+                        </button>
+                      )}
                     </>
                   )}
-                  {JSON.parse(window.localStorage.getItem("whom"))?.userType === "employee" && (
+                </motion.div>
+
+                {/* Maintenance Requests */}
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.5 }}
+                  className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                >
+                  <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-xl font-bold">Demandes de Maintenance Récentes</h2>
+                    <Link
+                      to={`/${userType}/maintenancerequests`}
+                      className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 text-sm flex items-center gap-1 relative group"
+                      aria-label="Voir toutes les demandes de maintenance"
+                    >
+                      <FaWrench />
+                      Voir toutes les demandes
+                      <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Voir toutes les demandes</span>
+                    </Link>
+                  </div>
+                  {maintenanceRequests.length === 0 ? (
+                    renderEmptyPlaceholder("Aucune demande de maintenance récente.")
+                  ) : (
+                    <ul className="space-y-2">
+                      {maintenanceRequests.map((request) => (
+                        <li key={request.id} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
+                          <span>Chambre {request.room_no}: {request.description}</span>
+                          <span
+                            className={`text-xs font-semibold ${
+                              request.status?.toLowerCase() === "pending"
+                                ? "text-red-500"
+                                : request.status?.toLowerCase() === "in_progress"
+                                ? "text-blue-500"
+                                : request.status?.toLowerCase() === "resolved"
+                                ? "text-green-500"
+                                : "text-gray-400 dark:text-gray-500"
+                            }`}
+                          >
+                            {request.status?.toLowerCase() === "pending"
+                              ? "En attente"
+                              : request.status?.toLowerCase() === "in_progress"
+                              ? "En cours"
+                              : request.status?.toLowerCase() === "resolved"
+                              ? "Résolu"
+                              : "Inconnu"}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </motion.div>
+
+                {/* Complaint Summary */}
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.5 }}
+                  className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                >
+                  <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-xl font-bold">Résumé des Plaintes Récentes</h2>
+                    <div className="flex items-center gap-2">
+                      <Link
+                        to={`/${userType}/complaint`}
+                        className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 text-sm flex items-center gap-1 relative group"
+                        aria-label="Voir toutes les plaintes"
+                      >
+                        Voir toutes les plaintes
+                        <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Voir toutes les plaintes</span>
+                      </Link>
+                      {complaintSummary.some(complaint => !complaint.resolved) && (
+                        <button
+                          onClick={resolveAllComplaints}
+                          className="text-green-500 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300 transition-all duration-300 text-sm flex items-center gap-1 relative group"
+                          aria-label="Résoudre toutes les plaintes"
+                        >
+                          Résoudre tout
+                          <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Résoudre toutes les plaintes</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {complaintSummary.length === 0 ? (
+                    renderEmptyPlaceholder("Aucune plainte récente.")
+                  ) : (
                     <>
+                      <ul className="space-y-2">
+                        {complaintSummary.map((complaint) => (
+                          <li key={complaint.room_no} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
+                            <span>Chambre {complaint.room_no}: {complaint.complaints}</span>
+                            <div className="flex items-center gap-2">
+                              <span
+                                className={`text-xs font-semibold ${complaint.resolved ? "text-green-500" : "text-red-500"}`}
+                              >
+                                {complaint.resolved ? "Résolu" : "Non résolu"}
+                              </span>
+                              {!complaint.resolved && userType === "owner" && (
+                                <button
+                                  onClick={async () => {
+                                    try {
+                                      await axios.post(`${process.env.REACT_APP_SERVER}/deletecomplaint`, { room_no: complaint.room_no });
+                                      toast.success("Plainte résolue avec succès");
+                                      getBoxInfo();
+                                    } catch (error) {
+                                      toast.error("Erreur lors de la résolution de la plainte : " + (error.response?.data?.error || error.message));
+                                    }
+                                  }}
+                                  className="text-green-500 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300 transition-all duration-300 text-sm relative group"
+                                  aria-label="Résoudre la plainte"
+                                >
+                                  Résoudre
+                                  <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Résoudre</span>
+                                </button>
+                              )}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                      <div className="mt-4">
+                        <canvas id="complaintsChart" height="150"></canvas>
+                      </div>
+                    </>
+                  )}
+                </motion.div>
+              </div>
+            </div>
+          )}
+
+          {userType === "employee" && (
+            <div className="flex-1 flex flex-col gap-8">
+              {/* Middle Row: Dashboard Cards, Actions, and Pending Tasks */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                {/* Dashboard Cards (1x2 Grid) */}
+                <div className="lg:col-span-1 grid grid-cols-1 gap-8">
+                  {forBox.map((ele, index) => (
+                    <motion.div
+                      key={index + 1}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.5, delay: index * 0.1 }}
+                      className={`p-6 rounded-xl shadow-lg transform hover:-translate-y-1 transition-all duration-300 flex items-center gap-4 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 border-l-4 border-yellow-500 w-full border border-gray-200 dark:border-gray-700`}
+                    >
+                      <div className="text-3xl text-blue-500">{ele.icon}</div>
+                      <div>
+                        <h1 className="font-bold text-2xl">{ele.value}</h1>
+                        <p className="font-semibold text-sm uppercase text-gray-500 dark:text-gray-400 mt-2 tracking-wide">
+                          {ele.label}
+                        </p>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+
+                {/* Actions Rapides and Pending Tasks (Stacked) */}
+                <div className="lg:col-span-2 flex flex-col gap-8">
+                  <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.5 }}
+                    className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                  >
+                    <h2 className="text-xl font-bold mb-4 text-center">Actions Rapides</h2>
+                    <div className="flex flex-col gap-3">
                       <Link
                         to="/employee/viewcomplaints"
-                        className={`p-2 h-10 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-sm ${
-                          darkMode ? "bg-gray-700 text-gray-200 hover:bg-gray-600" : "bg-blue-500 text-white hover:bg-blue-600"
-                        }`}
+                        className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
                         aria-label="Voir les plaintes"
                       >
                         <FaFileAlt />
                         Voir les plaintes
                       </Link>
-                    </>
-                  )}
-                </div>
-              </motion.div>
+                    </div>
+                  </motion.div>
 
-              {/* System Status Card */}
-              {JSON.parse(window.localStorage.getItem("whom"))?.userType === "admin" && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.5 }}
+                    className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700 flex-1"
+                  >
+                    <h2 className="text-xl font-bold mb-4 text-center">Tâches en Attente</h2>
+                    {pendingTasks.length === 0 ? (
+                      renderEmptyPlaceholder("Aucune tâche en attente.")
+                    ) : (
+                      <ul className="space-y-2">
+                        {pendingTasks.slice(0, 3).map((task, index) => (
+                          <li key={index} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
+                            <span>{task.description}</span>
+                            <span
+                              className={`text-xs font-semibold ${
+                                task.status?.toLowerCase() === "pending"
+                                  ? "text-red-500"
+                                  : task.status?.toLowerCase() === "in_progress"
+                                  ? "text-blue-500"
+                                  : "text-green-500"
+                              }`}
+                            >
+                              {task.status?.toLowerCase() === "pending"
+                                ? "En attente"
+                                : task.status?.toLowerCase() === "in_progress"
+                                ? "En cours"
+                                : "Résolu"}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </motion.div>
+                </div>
+              </div>
+
+              {/* Bottom Row: Email Writer and Maintenance Requests */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                {/* Email Writer */}
                 <motion.div
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.5 }}
-                  className={`rounded-lg shadow-lg p-4 transition-all duration-300 hover:shadow-xl h-fit ${
-                    darkMode ? "bg-gray-800 text-gray-200" : "bg-white text-gray-800"
-                  }`}
+                  className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
                 >
-                  <h2 className="text-lg font-bold mb-2 text-center">État du Système</h2>
+                  <h2 className="text-xl font-bold mb-4 text-center flex items-center justify-center gap-2">
+                    <FaEnvelope className="text-blue-500 text-2xl" />
+                    Envoyer un Message
+                  </h2>
+                  <form onSubmit={handleEmailSubmit} className="space-y-4">
+                    <div className="flex gap-4">
+                      <div className="flex-1">
+                        <label className="block text-sm font-medium mb-1">Type de destinataire</label>
+                        <select
+                          value={emailForm.recipientType}
+                          onChange={(e) => {
+                            setEmailForm({ ...emailForm, recipientType: e.target.value, recipientId: "" });
+                          }}
+                          className={`w-full p-2 border rounded text-sm transition-all duration-300 focus:ring-2 focus:ring-blue-500 ${
+                            darkMode ? "bg-gray-700 text-gray-200 border-gray-600" : "bg-white text-gray-800 border-gray-300"
+                          }`}
+                          required
+                        >
+                          <option value="">Sélectionnez un type</option>
+                          <option value="admin">Administrateur</option>
+                          <option value="owner">Propriétaire</option>
+                        </select>
+                      </div>
+                      {emailForm.recipientType && (
+                        <div className="flex-1">
+                          <label className="block text-sm font-medium mb-1">Destinataire</label>
+                          <select
+                            value={emailForm.recipientId}
+                            onChange={(e) => setEmailForm({ ...emailForm, recipientId: e.target.value })}
+                            className={`w-full p-2 border rounded text-sm transition-all duration-300 focus:ring-2 focus:ring-blue-500 ${
+                              darkMode ? "bg-gray-700 text-gray-200 border-gray-600" : "bg-white text-gray-800 border-gray-300"
+                            }`}
+                            required
+                        >
+                          <option value="">Sélectionnez un destinataire</option>
+                          {users
+                            .filter((u) => u.type === emailForm.recipientType)
+                            .map((u) => (
+                              <option key={`${u.type}-${u.id}`} value={u.id}>
+                                {u.name} ({u.type === "admin" ? "Administrateur" : "Propriétaire"})
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Sujet</label>
+                    <input
+                      type="text"
+                      value={emailForm.subject}
+                      onChange={(e) => setEmailForm({ ...emailForm, subject: e.target.value })}
+                      className={`w-full p-2 border rounded text-sm transition-all duration-300 focus:ring-2 focus:ring-blue-500 ${
+                        darkMode ? "bg-gray-700 text-gray-200 border-gray-600" : "bg-white text-gray-800 border-gray-300"
+                      }`}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Message</label>
+                    <textarea
+                      value={emailForm.message}
+                      onChange={(e) => setEmailForm({ ...emailForm, message: e.target.value })}
+                      className={`w-full p-2 border rounded text-sm transition-all duration-300 h-24 resize-none focus:ring-2 focus:ring-blue-500 ${
+                        darkMode ? "bg-gray-700 text-gray-200 border-gray-600" : "bg-white text-gray-800 border-gray-300"
+                      }`}
+                      required
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={emailSending}
+                    className={`w-full p-3 rounded-lg text-base transition-all duration-300 flex items-center justify-center gap-2 ${
+                      emailSending
+                        ? "bg-gray-500 cursor-not-allowed"
+                        : darkMode
+                        ? "bg-blue-600 text-white hover:bg-blue-700"
+                        : "bg-blue-500 text-white hover:bg-blue-600"
+                    }`}
+                  >
+                    <FaPaperPlane />
+                    {emailSending ? "Envoi en cours..." : "Envoyer le message"}
+                  </button>
+                </form>
+              </motion.div>
+
+              {/* Maintenance Requests */}
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5 }}
+                className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+              >
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-xl font-bold">Demandes de Maintenance Récentes</h2>
+                  <Link
+                    to={`/${userType}/maintenancerequests`}
+                    className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 text-sm flex items-center gap-1 relative group"
+                    aria-label="Voir toutes les demandes de maintenance"
+                  >
+                    <FaWrench />
+                    Voir toutes les demandes
+                    <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">
+                      Voir toutes les demandes
+                    </span>
+                  </Link>
+                </div>
+
+                {maintenanceRequests.length === 0 ? (
+                  renderEmptyPlaceholder("Aucune demande de maintenance récente.")
+                ) : (
+                  <ul className="space-y-2">
+                    {maintenanceRequests.map((request) => (
+                      <li
+                        key={request.id}
+                        className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md"
+                      >
+                        <span>
+                          Chambre {request.room_no} : {request.description}
+                        </span>
+                        <span className="text-xs font-semibold">
+                          {request.status?.toLowerCase() === "pending"
+                            ? <span className="text-red-500">En attente</span>
+                            : request.status?.toLowerCase() === "in_progress"
+                            ? <span className="text-blue-500">En cours</span>
+                            : request.status?.toLowerCase() === "resolved"
+                            ? <span className="text-green-500">Résolu</span>
+                            : <span className="text-gray-500">Inconnu</span>
+                          }
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </motion.div>
+
+            </div>
+          </div>
+        )}
+
+        {userType === "admin" && (
+          <div className="flex-1 flex flex-col gap-8">
+            {/* Middle Row: Dashboard Cards, Actions/System Stats, and System Alerts */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              {/* Dashboard Cards and User Distribution Chart */}
+              <div className="lg:col-span-2 flex flex-col gap-8">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
+                  {forBox.map((ele, index) => (
+                    <motion.div
+                      key={index + 1}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.5, delay: index * 0.1 }}
+                      className={`p-6 rounded-xl shadow-lg transform hover:-translate-y-1 transition-all duration-300 flex items-center gap-4 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 border-l-4 border-blue-500 w-full border border-gray-200 dark:border-gray-700`}
+>
+                      <div className="text-3xl text-blue-500">{ele.icon}</div>
+                      <div>
+                        <h1 className="font-bold text-2xl">{ele.value}</h1>
+                        <p className="font-semibold text-sm uppercase text-gray-500 dark:text-gray-400 mt-2 tracking-wide">
+                          {ele.label}
+                        </p>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.5 }}
+                  className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                >
+                  <h2 className="text-xl font-bold mb-4 text-center">Répartition des Utilisateurs</h2>
+                  <div className="h-64">
+                    <canvas ref={canvasRef} height="200"></canvas>
+                  </div>
+                </motion.div>
+              </div>
+
+              {/* Actions Rapides, État du Système, Aperçu des Statistiques Rapides, System Alerts */}
+              <div className="lg:col-span-1 flex flex-col gap-8">
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.5 }}
+                  className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                >
+                  <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-xl font-bold">Actions Rapides</h2>
+                    <button
+                      onClick={refreshAdminData}
+                      className="p-2 rounded-full transition-all duration-300 bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 relative group"
+                      aria-label="Actualiser les données"
+                    >
+                      <FaSyncAlt className={statsLoading ? "animate-spin" : ""} size={16} />
+                      <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-10 left-1/2 transform -translate-x-1/2">Actualiser</span>
+                    </button>
+                  </div>
+                  <div className="flex flex-col gap-3">
+                    <Link
+                      to="/admin/tenantdetails"
+                      className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+                      aria-label="Voir les locataires"
+                    >
+                      <FaUsers />
+                      Voir les locataires
+                    </Link>
+                    <Link
+                      to="/admin/createowner"
+                      className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+                      aria-label="Créer un propriétaire"
+                    >
+                      <FaPlus />
+                      Créer un propriétaire
+                    </Link>
+                    <button
+                      onClick={exportUserData}
+                      className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-green-500 text-white hover:bg-green-600 dark:bg-green-600 dark:hover:bg-green-700"
+                      aria-label="Exporter les données"
+                    >
+                      <FaDownload />
+                      Exporter les données
+                    </button>
+                  </div>
+                </motion.div>
+
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.5 }}
+                  className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                >
+                  <h2 className="text-xl font-bold mb-4 text-center">État du Système</h2>
                   {statsLoading ? (
-                    <div className="space-y-2">
-                      <div className="h-4 bg-gray-200 rounded animate-pulse w-3/4"></div>
-                      <div className="h-4 bg-gray-200 rounded animate-pulse w-1/2"></div>
-                      <div className="h-4 bg-gray-200 rounded animate-pulse w-2/3"></div>
-                    </div>
+                    renderSkeletonLoader()
                   ) : statsError ? (
                     <div className="text-sm text-red-500">
                       <p>{statsError}</p>
                       <button
                         onClick={fetchSystemStatusAndQuickStats}
-                        className="mt-2 text-blue-500 hover:text-blue-700 transition-all duration-300"
+                        className="mt-2 text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300"
                         aria-label="Réessayer de charger les statistiques"
                       >
                         Réessayer
                       </button>
                     </div>
                   ) : (
-                    <div className="space-y-2">
-                      <div className="text-sm flex items-center gap-2">
-                        <FaServer className="text-blue-500" />
-                        <span className="font-semibold">Temps de disponibilité :</span> {systemStatus.uptime}
-                        <div className="w-full bg-gray-200 rounded-full h-2.5 ml-2">
+                    <div className="space-y-3">
+                      <div className="text-base flex items-center gap-2">
+                        <FaServer className="text-blue-500 text-2xl" />
+                        <span className="font-semibold">Temps de disponibilité:</span>
+                        <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-3">
                           <div
-                            className="bg-blue-500 h-2.5 rounded-full"
+                            className="bg-blue-500 h-3 rounded-full transition-all duration-500"
                             style={{ width: systemStatus.uptime }}
                           ></div>
                         </div>
+                        <span>{systemStatus.uptime}</span>
                       </div>
-                      <p className="text-sm flex items-center gap-2">
-                        <FaUsers className="text-blue-500" />
-                        <span className="font-semibold">Utilisateurs actifs :</span> {systemStatus.activeUsers}
+                      <p className="text-base flex items-center gap-2">
+                        <FaUsers className="text-blue-500 text-2xl" />
+                        <span className="font-semibold">Utilisateurs actifs:</span> {systemStatus.activeUsers}
                       </p>
-                      <p className="text-sm flex items-center gap-2">
-                        <FaExclamationCircle className={systemStatus.alerts > 0 ? "text-red-500" : "text-green-500"} />
-                        <span className="font-semibold">Alertes récentes :</span>
+                      <p className="text-base flex items-center gap-2">
+                        <FaExclamationCircle className={systemStatus.alerts > 0 ? "text-red-500 text-2xl" : "text-green-500 text-2xl"} />
+                        <span className="font-semibold">Alertes récentes:</span>
                         <span className={systemStatus.alerts > 0 ? "text-red-500" : "text-green-500"}>
                           {systemStatus.alerts}
                         </span>
@@ -1233,177 +1655,117 @@ function Dashboard(props) {
                     </div>
                   )}
                 </motion.div>
-              )}
 
-              {/* Quick Stats Overview */}
-              {JSON.parse(window.localStorage.getItem("whom"))?.userType === "admin" && (
                 <motion.div
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.5 }}
-                  className={`rounded-lg shadow-lg p-4 transition-all duration-300 hover:shadow-xl h-fit ${
-                    darkMode ? "bg-gray-800 text-gray-200" : "bg-white text-gray-800"
-                  }`}
+                  className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
                 >
-                  <h2 className="text-lg font-bold mb-2 text-center">Aperçu des Statistiques Rapides</h2>
+                  <h2 className="text-xl font-bold mb-4 text-center">Aperçu des Statistiques Rapides</h2>
                   {statsLoading ? (
-                    <div className="space-y-2">
-                      <div className="h-4 bg-gray-200 rounded animate-pulse w-3/4"></div>
-                      <div className="h-4 bg-gray-200 rounded animate-pulse w-1/2"></div>
-                      <div className="h-4 bg-gray-200 rounded animate-pulse w-2/3"></div>
-                    </div>
+                    renderSkeletonLoader()
                   ) : statsError ? (
                     <div className="text-sm text-red-500">
                       <p>{statsError}</p>
                       <button
                         onClick={fetchSystemStatusAndQuickStats}
-                        className="mt-2 text-blue-500 hover:text-blue-700 transition-all duration-300"
+                        className="mt-2 text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300"
                         aria-label="Réessayer de charger les statistiques"
                       >
                         Réessayer
                       </button>
                     </div>
                   ) : (
-                    <div className="space-y-2">
-                      <p className="text-sm flex items-center gap-2">
-                        <FaUsers className="text-blue-500" />
-                        <span className="font-semibold">Connexions aujourd'hui :</span> {quickStats.totalLoginsToday}
+                    <div className="space-y-3">
+                      <p className="text-base flex items-center gap-2">
+                        <FaUsers className="text-blue-500 text-2xl" />
+                        <span className="font-semibold">Connexions aujourd'hui:</span> {quickStats.totalLoginsToday}
                       </p>
-                      <p className="text-sm flex items-center gap-2">
-                        <FaExclamationTriangle className="text-yellow-500" />
-                        <span className="font-semibold">Plaintes déposées :</span> {quickStats.totalComplaintsFiled}
+                      <p className="text-base flex items-center gap-2">
+                        <FaExclamationTriangle className="text-yellow-500 text-2xl" />
+                        <span className="font-semibold">Plaintes déposées:</span> {quickStats.totalComplaintsFiled}
                       </p>
-                      <p className="text-sm flex items-center gap-2">
-                        <FaExclamationCircle className="text-red-500" />
-                        <span className="font-semibold">Demandes en attente :</span> {quickStats.pendingRequests}
+                      <p className="text-base flex items-center gap-2">
+                        <FaExclamationCircle className="text-red-500 text-2xl" />
+                        <span className="font-semibold">Demandes en attente:</span> {quickStats.pendingRequests}
                       </p>
                     </div>
                   )}
                 </motion.div>
-              )}
-            </div>
-          </div>
 
-          {/* Bottom Row: Complaint Summary, Payment Status, Recent Activity, Maintenance Requests, Quick Links */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {JSON.parse(window.localStorage.getItem("whom"))?.userType === "owner" && (
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5 }}
-                className={`rounded-lg shadow-lg p-4 transition-all duration-300 hover:shadow-xl ${
-                  darkMode ? "bg-gray-800 text-gray-200" : "bg-white text-gray-800"
-                } ${complaintSummary.length === 0 ? "h-32" : "min-h-[300px]"}`}
-              >
-                <div className="flex justify-between items-center mb-2">
-                  <h2 className="text-lg font-bold">Résumé des Plaintes Récentes</h2>
-                  <Link
-                    to="/owner/complaint"
-                    className={`text-blue-500 hover:text-blue-700 transition-all duration-300 text-sm ${
-                      darkMode ? "text-blue-400 hover:text-blue-300" : ""
-                    }`}
-                    aria-label="Voir toutes les plaintes"
-                  >
-                    Voir toutes les plaintes
-                  </Link>
-                </div>
-                {complaintSummary.length === 0 ? (
-                  renderEmptyPlaceholder("Aucune plainte récente.")
-                ) : (
-                  <>
-                    <ul className="space-y-1">
-                      {complaintSummary.map((complaint) => (
-                        <li key={complaint.room_no} className="flex justify-between items-center text-sm">
-                          <span>Chambre {complaint.room_no}: {complaint.complaints}</span>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-gray-400">{complaint.resolved ? "Résolu" : "Non résolu"}</span>
-                            {!complaint.resolved && (
-                              <button
-                                onClick={async () => {
-                                  try {
-                                    await axios.post(`${process.env.REACT_APP_SERVER}/deletecomplaint`, { room_no: complaint.room_no });
-                                    toast.success("Plainte résolue avec succès");
-                                    getBoxInfo();
-                                  } catch (error) {
-                                    toast.error("Erreur lors de la résolution de la plainte : " + (error.response?.data?.error || error.message));
-                                  }
-                                }}
-                                className="text-green-500 hover:text-green-700 transition-all duration-300 text-sm"
-                                aria-label="Résoudre la plainte"
-                              >
-                                Résoudre
-                              </button>
-                            )}
-                          </div>
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.5 }}
+                  className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                >
+                  <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-xl font-bold">Alertes Système</h2>
+                    {systemAlerts.length > 0 && (
+                      <button
+                        onClick={clearSystemAlerts}
+                        className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 transition-all duration-300 text-sm flex items-center gap-1 relative group"
+                        aria-label="Effacer les alertes"
+                      >
+                        Effacer les alertes
+                        <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Effacer</span>
+                      </button>
+                    )}
+                  </div>
+                  {systemAlerts.length === 0 ? (
+                    renderEmptyPlaceholder("Aucune alerte système.")
+                  ) : (
+                    <ul className="space-y-2">
+                      {systemAlerts.slice(0, 3).map((alert, index) => (
+                        <li key={index} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
+                          <span>{alert.message}</span>
+                          <span className="text-xs text-gray-400 dark:text-gray-500">
+                            {new Date(alert.date).toLocaleString()}
+                          </span>
                         </li>
                       ))}
                     </ul>
-                    <div className="mt-2">
-                      <canvas id="complaintsChart" height="150"></canvas>
-                    </div>
-                  </>
-                )}
-              </motion.div>
-            )}
+                  )}
+                </motion.div>
+              </div>
+            </div>
 
-            {JSON.parse(window.localStorage.getItem("whom"))?.userType === "tenant" && (
+            {/* Bottom Row: Recent Activities, Quick Links, Maintenance Requests */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              {/* Recent Activities */}
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.5 }}
-                className={`rounded-lg shadow-lg p-4 transition-all duration-300 hover:shadow-xl min-h-[300px] ${
-                  darkMode ? "bg-gray-800 text-gray-200" : "bg-white text-gray-800"
-                }`}
+                className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
               >
-                <h2 className="text-lg font-bold mb-2">Statut de Paiement</h2>
-                {paymentStatus ? (
-                  <>
-                    <p className="text-sm">Statut: {paymentStatus.status === "Payé" ? "Payé" : "Dû"}</p>
-                    {paymentStatus.status !== "Payé" && (
-                      <p className="text-sm">Échéance: {paymentStatus.dueDate || "N/A"}</p>
-                    )}
-                  </>
-                ) : (
-                  <p className="text-sm">Chargement du statut de paiement...</p>
-                )}
-              </motion.div>
-            )}
-
-            {["tenant", "owner", "admin"].includes(JSON.parse(window.localStorage.getItem("whom"))?.userType) && (
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5 }}
-                className={`rounded-lg shadow-lg p-4 transition-all duration-300 hover:shadow-xl ${
-                  darkMode ? "bg-gray-800 text-gray-200" : "bg-white text-gray-800"
-                } ${filteredActivities.length === 0 ? "h-32" : "min-h-[300px]"}`}
-              >
-                <div className="flex justify-between items-center mb-2">
-                  <h2 className="text-lg font-bold">Activités Récentes</h2>
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-xl font-bold">Activités Récentes</h2>
                   <div className="flex items-center gap-2">
-                    <input
-                      type="date"
-                      value={activityFilterDate}
-                      onChange={(e) => {
-                        setActivityFilterDate(e.target.value);
-                        handleActivityFilter(e.target.value);
-                      }}
-                      className={`p-2 border rounded text-sm focus:ring-2 focus:ring-blue-500 transition-all duration-300 ${
-                        darkMode ? "bg-gray-700 text-gray-200 border-gray-600" : "bg-white text-gray-800 border-gray-300"
-                      }`}
-                      aria-label="Filtrer les activités par date"
-                    />
+                    <div className="relative group">
+                      <input
+                        type="date"
+                        value={activityFilterDate}
+                        onChange={(e) => {
+                          setActivityFilterDate(e.target.value);
+                          handleActivityFilter(e.target.value);
+                        }}
+                        className="p-2 border rounded text-sm focus:ring-2 focus:ring-blue-500 transition-all duration-300 bg-white text-gray-800 border-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"
+                        aria-label="Filtrer les activités par date"
+                      />
+                      <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-10 left-1/2 transform -translate-x-1/2">Filtrer par date</span>
+                    </div>
                     <button
                       onClick={() => {
                         setActivityFilterDate("");
                         handleActivityFilter("");
                       }}
-                      className={`p-2 rounded-full transition-all duration-300 ${
-                        darkMode ? "bg-gray-700 text-gray-200 hover:bg-gray-600" : "bg-gray-300 text-gray-700 hover:bg-gray-400"
-                      }`}
+                      className="p-2 rounded-full transition-all duration-300 bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 relative group"
                       aria-label="Effacer le filtre"
                     >
                       <FaFilter size={16} />
+                      <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-10 left-1/2 transform -translate-x-1/2">Effacer le filtre</span>
                     </button>
                   </div>
                 </div>
@@ -1411,20 +1773,30 @@ function Dashboard(props) {
                   renderEmptyPlaceholder("Aucune activité récente.")
                 ) : (
                   <>
-                    <ul className="space-y-1">
+                    <ul className="space-y-2">
                       {(showAllActivities ? filteredActivities : filteredActivities.slice(0, 4)).map((activity, index) => (
-                        <li key={index} className="flex justify-between items-center text-sm">
+                        <li key={index} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
                           <span>{activity.action}</span>
-                          <span className="text-xs text-gray-400">
-                            {new Date(activity.date).toLocaleString()}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-gray-400 dark:text-gray-500">
+                              {new Date(activity.date).toLocaleString()}
+                            </span>
+                            <button
+                              onClick={() => markActivityAsRead(index)}
+                              className="text-green-500 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300 transition-all duration-300 text-sm relative group"
+                              aria-label="Marquer comme lu"
+                            >
+                              <FaCheck />
+                              <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Marquer comme lu</span>
+                            </button>
+                          </div>
                         </li>
                       ))}
                     </ul>
                     {filteredActivities.length > 4 && (
                       <button
                         onClick={() => setShowAllActivities(!showAllActivities)}
-                        className="text-blue-500 hover:text-blue-700 transition-all duration-300 text-sm mt-2"
+                        className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 text-sm mt-3"
                         aria-label={showAllActivities ? "Afficher moins d'activités" : "Afficher plus d'activités"}
                       >
                         {showAllActivities ? "Afficher moins" : "Afficher plus"}
@@ -1433,42 +1805,69 @@ function Dashboard(props) {
                   </>
                 )}
               </motion.div>
-            )}
 
-            {["owner", "admin", "employee"].includes(JSON.parse(window.localStorage.getItem("whom"))?.userType) ? (
+              {/* Quick Links */}
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.5 }}
-                className={`rounded-lg shadow-lg p-4 transition-all duration-300 hover:shadow-xl ${
-                  darkMode ? "bg-gray-800 text-gray-200" : "bg-white text-gray-800"
-                } ${maintenanceRequests.length === 0 ? "h-32" : "min-h-[300px]"}`}
+                className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
               >
-                <div className="flex justify-between items-center mb-2">
-                  <h2 className="text-lg font-bold">Demandes de Maintenance Récentes</h2>
+                <h2 className="text-xl font-bold mb-4 text-center">Liens Rapides</h2>
+                <div className="flex flex-col gap-3">
+                  {quickLinks.map((link, index) => (
+                    <a
+                      key={index}
+                      href={link.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base w-full bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+                      aria-label={link.name}
+                    >
+                      {link.icon}
+                      {link.name}
+                    </a>
+                  ))}
+                </div>
+              </motion.div>
+
+              {/* Maintenance Requests */}
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5 }}
+                className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+              >
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-xl font-bold">Demandes de Maintenance Récentes</h2>
                   <Link
-                    to={`/${JSON.parse(window.localStorage.getItem("whom"))?.userType}/maintenancerequests`}
-                    className={`text-blue-500 hover:text-blue-700 transition-all duration-300 text-sm ${
-                      darkMode ? "text-blue-400 hover:text-blue-300" : ""
-                    }`}
+                    to={`/${userType}/maintenancerequests`}
+                    className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 text-sm flex items-center gap-1 relative group"
                     aria-label="Voir toutes les demandes de maintenance"
                   >
-                    <FaWrench /> Voir toutes les demandes
+                    <FaWrench />
+                    Voir toutes les demandes
+                    <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Voir toutes les demandes</span>
                   </Link>
                 </div>
                 {maintenanceRequests.length === 0 ? (
                   renderEmptyPlaceholder("Aucune demande de maintenance récente.")
                 ) : (
-                  <ul className="space-y-1">
+                  <ul className="space-y-2">
                     {maintenanceRequests.map((request) => (
-                      <li key={request.id} className="flex justify-between items-center text-sm">
+                      <li key={request.id} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
                         <span>Chambre {request.room_no}: {request.description}</span>
-                        <span className={`text-xs ${
-                          request.status?.toLowerCase() === "pending" ? "text-yellow-500" :
-                          request.status?.toLowerCase() === "in_progress" ? "text-blue-500" :
-                          request.status?.toLowerCase() === "resolved" ? "text-green-500" :
-                          "text-gray-400"
-                        }`}>
+                        <span
+                          className={`text-xs font-semibold ${
+                            request.status?.toLowerCase() === "pending"
+                              ? "text-red-500"
+                              : request.status?.toLowerCase() === "in_progress"
+                              ? "text-blue-500"
+                              : request.status?.toLowerCase() === "resolved"
+                              ? "text-green-500"
+                              : "text-gray-400 dark:text-gray-500"
+                          }`}
+                        >
                           {request.status?.toLowerCase() === "pending"
                             ? "En attente"
                             : request.status?.toLowerCase() === "in_progress"
@@ -1482,136 +1881,50 @@ function Dashboard(props) {
                   </ul>
                 )}
               </motion.div>
-            ) : JSON.parse(window.localStorage.getItem("whom"))?.userType === "tenant" ? (
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5 }}
-                className={`rounded-lg shadow-lg p-4 transition-all duration-300 hover:shadow-xl min-h-[300px] ${
-                  darkMode ? "bg-gray-800 text-gray-200" : "bg-white text-gray-800"
-                }`}
-              >
-                <h2 className="text-lg font-bold mb-2">Soumettre une Demande de Maintenance</h2>
-                <form onSubmit={handleFormSubmit} className="space-y-2">
-                  <div>
-                    <label className="block text-sm font-medium">Numéro de chambre</label>
-                    <input
-                      type="text"
-                      value={maintenanceForm.room_no}
-                      onChange={(e) => setMaintenanceForm({ ...maintenanceForm, room_no: e.target.value })}
-                      className={`w-full p-2 border rounded text-sm ${
-                        darkMode ? "bg-gray-700 text-gray-200 border-gray-600" : "bg-white text-gray-800 border-gray-300"
-                      }`}
-                      required
-                      disabled
-                      aria-label="Numéro de chambre"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium">Description</label>
-                    <textarea
-                      value={maintenanceForm.description}
-                      onChange={(e) => setMaintenanceForm({ ...maintenanceForm, description: e.target.value })}
-                      className={`w-full p-2 border rounded text-sm ${
-                        darkMode ? "bg-gray-700 text-gray-200 border-gray-600" : "bg-white text-gray-800 border-gray-300"
-                      }`}
-                      rows="3"
-                      required
-                      aria-label="Description de la demande de maintenance"
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={maintenanceSubmitting}
-                    className={`w-full p-2 rounded text-sm transition-all duration-300 flex items-center justify-center gap-2 ${
-                      maintenanceSubmitting
-                        ? "bg-gray-500 cursor-not-allowed"
-                        : darkMode
-                        ? "bg-blue-600 text-white hover:bg-blue-700"
-                        : "bg-blue-500 text-white hover:bg-blue-600"
-                    }`}
-                    aria-label="Soumettre la demande de maintenance"
-                  >
-                    {maintenanceSubmitting ? (
-                      <FaSyncAlt className="animate-spin" />
-                    ) : (
-                      <FaPlus />
-                    )}
-                    Soumettre
-                  </button>
-                </form>
-              </motion.div>
-            ) : null}
-
-            {/* Quick Links */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5 }}
-              className={`rounded-lg shadow-lg p-4 transition-all duration-300 hover:shadow-xl min-h-[300px] ${
-                darkMode ? "bg-gray-800 text-gray-200" : "bg-white text-gray-800"
-              }`}
-            >
-              <h2 className="text-lg font-bold mb-12 text-center">Liens Rapides</h2>
-              <div className="flex flex-col gap-2 px-4">
-                {quickLinks.map((link, index) => (
-                  <a
-                    key={index}
-                    href={link.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className={`p-2 h-10 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-sm w-full ${
-                      darkMode ? "bg-gray-700 text-gray-200 hover:bg-gray-600" : "bg-blue-500 text-white hover:bg-blue-600"
-                    }`}
-                    aria-label={link.name}
-                  >
-                    {link.icon}
-                    {link.name}
-                  </a>
-                ))}
-              </div>
-            </motion.div>
-          </div>
-
-                    {/* Apartment Rules */}
-                    <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5 }}
-            className={`rounded-lg shadow-md p-4 transition-all duration-300 hover:shadow-xl max-h-96 overflow-y-auto ${
-              darkMode ? "bg-gray-800" : "bg-white"
-            }`}
-          >
-            <div className="flex justify-between items-center mb-2">
-              <h1 className="text-lg font-bold">Règles et Régulations de l'Appartement</h1>
-              <button
-                onClick={toggleRules}
-                className="text-blue-500 hover:text-blue-700 transition-all duration-300"
-                aria-label={showRules ? "Masquer les règles" : "Afficher les règles"}
-              >
-                {showRules ? <FaChevronUp size={16} /> : <FaChevronDown size={16} />}
-              </button>
             </div>
-            <AnimatePresence>
-              {showRules && (
-                <motion.ol
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  transition={{ duration: 0.3 }}
-                  className="list-decimal px-4 py-1 text-gray-600 space-y-1 text-sm"
-                >
-                  {rules.map((rule, index) => (
-                    <li key={index}>{rule}</li>
-                  ))}
-                </motion.ol>
-              )}
-            </AnimatePresence>
-          </motion.div>
-        </div>
-      )}
-    </div>
-  );
+          </div>
+        )}
+
+        {/* Footer Row: Apartment Rules (Common for All User Types) */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl max-h-96 overflow-y-auto bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+        >
+          <div className="flex justify-between items-center mb-4">
+            <h1 className="text-xl font-bold">Règles et Régulations de l'Appartement</h1>
+            <button
+              onClick={toggleRules}
+              className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 relative group"
+              aria-label={showRules ? "Masquer les règles" : "Afficher les règles"}
+            >
+              {showRules ? <FaChevronUp size={16} /> : <FaChevronDown size={16} />}
+              <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">
+                {showRules ? "Masquer" : "Afficher"}
+              </span>
+            </button>
+          </div>
+          <AnimatePresence>
+            {showRules && (
+              <motion.ol
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.3 }}
+                className="list-decimal px-4 py-1 text-gray-600 dark:text-gray-400 space-y-2 text-base"
+              >
+                {rules.map((rule, index) => (
+                  <li key={index}>{rule}</li>
+                ))}
+              </motion.ol>
+            )}
+          </AnimatePresence>
+        </motion.div>
+      </div>
+    )}
+  </div>
+);
 }
 
 export default Dashboard;

@@ -19,7 +19,10 @@
   background: linear-gradient(45deg, rgba(131, 220, 255, 0.824), rgba(255, 105, 180, 0.898)), url('../public/pngwing.com\ \(2\).png') no-repeat center center/ cover;
   background-attachment: fixed;
 }
-
+.dashboardSkeleton {
+  @apply flex min-h-screen;
+  @apply bg-gray-100 dark:bg-gray-950;
+}
 input,
 textarea {
   outline: none !important;
@@ -39,7 +42,9 @@ a:hover {
   transition: all 0.1s ease-in-out;
   opacity: 0.8;
 }
-
+.card {
+  background-color: white !important;
+}
 /* *{
   color: white !important;
 } */

@@ -19,7 +19,9 @@
     "jsonwebtoken": "^9.0.2",
     "mongodb": "^4.7.0",
     "mysql": "^2.18.1",
-    "mysql2": "^3.6.5"
+    "mysql2": "^3.6.5",
+    "nodemailer": "^6.10.0",
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
     "nodemon": "^2.0.16"

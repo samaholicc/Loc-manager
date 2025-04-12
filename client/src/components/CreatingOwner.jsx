@@ -3,10 +3,10 @@ import axios from "axios";
 import { toast, ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import { motion } from "framer-motion";
-import { FaUser, FaCalendarAlt, FaLock, FaHome, FaFileSignature, FaPlus } from "react-icons/fa";
-import { useTheme } from "../context/ThemeContext"; // Import ThemeContext
+import { FaUser, FaCalendarAlt, FaLock, FaHome, FaFileSignature, FaPlus, FaEnvelope } from "react-icons/fa";
+import { useTheme } from "../context/ThemeContext";
 
-// Reusable Input Component
+// Reusable Input Component (unchanged)
 const InputField = ({ label, error, icon: Icon, ...props }) => (
   <div className="mb-3">
     <label
@@ -31,7 +31,7 @@ const InputField = ({ label, error, icon: Icon, ...props }) => (
   </div>
 );
 
-// Reusable Select Component
+// Reusable Select Component (unchanged)
 const SelectField = ({ label, error, icon: Icon, children, ...props }) => (
   <div className="mb-3">
     <label
@@ -59,9 +59,10 @@ const SelectField = ({ label, error, icon: Icon, children, ...props }) => (
 );
 
 function CreatingUser() {
-  const { darkMode } = useTheme(); // Access darkMode state
+  const { darkMode } = useTheme();
   const [formData, setFormData] = useState({
     name: "",
+    email: "",
     age: "",
     dob: "",
     roomno: "",
@@ -89,6 +90,8 @@ function CreatingUser() {
   const validateField = (name, value) => {
     const validators = {
       name: (v) => (v.length < 2 ? "Le nom doit contenir au moins 2 caractères" : ""),
+      email: (v) =>
+        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? "Veuillez entrer un email valide" : "",
       age: (v) => (isNaN(v) || v < 18 || v > 150 ? "L'âge doit être entre 18 et 150" : ""),
       roomno: (v) => (!v ? "Le numéro de chambre est requis" : ""),
       pass: (v) => (v.length < 6 ? "Le mot de passe doit contenir au moins 6 caractères" : ""),
@@ -120,6 +123,7 @@ function CreatingUser() {
     try {
       const res = await axios.post(`${process.env.REACT_APP_SERVER}/createowner`, {
         name: formData.name,
+        email: formData.email,
         age: formData.age,
         roomno: formData.roomno,
         password: formData.pass,
@@ -130,6 +134,7 @@ function CreatingUser() {
         toast.success("Propriétaire créé avec succès !");
         setFormData({
           name: "",
+          email: "",
           age: "",
           dob: "",
           roomno: "",
@@ -170,6 +175,7 @@ function CreatingUser() {
   const resetForm = () => {
     setFormData({
       name: "",
+      email: "",
       age: "",
       dob: "",
       roomno: "",
@@ -220,6 +226,17 @@ function CreatingUser() {
               placeholder="Entrez votre nom complet"
               error={errors.name}
               icon={FaUser}
+              darkMode={darkMode}
+            />
+            <InputField
+              label="Email"
+              name="email"
+              type="email"
+              value={formData.email}
+              onChange={handleChange}
+              placeholder="Entrez votre email"
+              error={errors.email}
+              icon={FaEnvelope}
               darkMode={darkMode}
             />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

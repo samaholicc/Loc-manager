@@ -25,18 +25,22 @@ function ComplaintsViewer(props) {
       if (!userId) {
         throw new Error("Utilisateur non connecté. Veuillez vous connecter.");
       }
+      // Extract numeric part (e.g., "o-123" -> "123")
+      const numericId = parseInt(userId.split('-')[1]);
+      if (isNaN(numericId)) {
+        throw new Error("ID utilisateur invalide.");
+      }
       const res = await axios.post(`${process.env.REACT_APP_SERVER}/ownercomplaints`, {
-        userId,
+        userId: numericId,
       });
       setComps(res.data);
     } catch (error) {
       console.error("Erreur lors de la récupération des plaintes:", error);
-      setError(error.message || "Une erreur s'est produite lors de la récupération des plaintes.");
+      setError(error.response?.data?.error || error.message || "Une erreur s'est produite lors de la récupération des plaintes.");
     } finally {
       setLoading(false);
     }
   };
-
   useEffect(() => {
     getComplaints();
   }, []);
@@ -168,13 +172,24 @@ function ComplaintsViewer(props) {
           {error}
         </div>
       ) : paginatedComplaints.length === 0 ? (
-        <div
-          className={`text-center text-lg font-medium p-5 rounded-lg shadow-md max-w-md mx-auto ${
-            darkMode ? "bg-gray-800 text-gray-400" : "bg-white text-gray-600"
-          }`}
-        >
-          Pas de plaintes trouvées.
-        </div>
+        <div className="text-center py-10">
+              <svg
+                className="mx-auto h-12 w-12 text-gray-400 dark:text-gray-500"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
+              </svg>
+              <h3 className="mt-2 text-lg font-medium text-gray-900 dark:text-gray-300">
+                Pas de plainte trouvée
+              </h3>
+            </div>
       ) : (
         <>
           <div className="grid gap-4 sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3 mb-4">

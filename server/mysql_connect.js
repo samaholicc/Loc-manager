@@ -13,10 +13,14 @@ async function connect() {
       insecureAuth: config.insecureAuth,
       protocol: config.protocol,
     });
-    console.log("database Connected!");
+    console.log("Database Connected! Config:", {
+      host: config.host,
+      user: config.user,
+      database: config.database,
+    });
   } catch (err) {
     console.error("Erreur lors de la connexion à la base de données:", err);
-    setTimeout(connect, 2000); // Réessayer après 2 secondes
+    setTimeout(connect, 2000);
   }
 
   con.on("error", (err) => {
@@ -196,17 +200,23 @@ async function viewcomplaints() {
 }
 
 async function ownercomplaints(ownerid) {
-  try {
-    await ensureConnection();
-    const sql =
-      "SELECT complaints, room_no, resolved FROM block WHERE room_no IN (SELECT room_no FROM owner WHERE owner_id IN (SELECT id FROM auth WHERE user_id = ?))";
-    const [results] = await con.query(sql, [ownerid]);
-    return results;
-  } catch (err) {
-    throw err;
-  }
+  // Extract numeric part (e.g., "a-123" -> 123)
+  const sql = `
+  SELECT complaints, room_no, resolved 
+  FROM block 
+  WHERE room_no IN (
+    SELECT room_no 
+    FROM owner 
+    WHERE owner_id IN (
+      SELECT id 
+      FROM auth_owner 
+      WHERE id = ?
+    )
+  )
+`;
+const result = await this.query(sql, [ownerid]);
+return result;
 }
-
 async function totaltenant() {
   try {
     await ensureConnection();

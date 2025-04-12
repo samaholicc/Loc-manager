@@ -39,19 +39,19 @@ function Auth() {
       );
       console.log("Auth response status:", res.status);
       console.log("Auth response data:", res.data);
+      console.log("Navigating to:", `/${res.data.user.toLowerCase()}`);
 
       if (res.data.access === "granted") {
         const userData = {
           userType: res.data.user,
           username: userId,
         };
-        // If the user is an admin, store the adminId in localStorage
         if (res.data.user === "admin" && res.data.adminId) {
           userData.adminId = res.data.adminId;
         }
+        window.localStorage.removeItem("whom"); // Clear previous data
         window.localStorage.setItem("whom", JSON.stringify(userData));
         toast.success(`Bienvenue, ${res.data.user} !`);
-        // Redirect to user-type-specific route
         nav(`/${res.data.user.toLowerCase()}`, { replace: true });
       } else {
         toast.error("Identifiants incorrects");

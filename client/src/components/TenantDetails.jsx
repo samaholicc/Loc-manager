@@ -96,7 +96,9 @@ function TenantDetails(props) {
 
   return (
     <section
-      className="min-h-screen py-25 px-10 flex justify-center items-center transition-all duration-300 bg-gray-100 dark:bg-gray-950"
+      className={`min-h-screen py-25 px-10 flex justify-center items-center ml-[1px] w-[calc(100%-1px)] transition-all duration-300 ${
+        darkMode ? "bg-gray-900" : "bg-gray-100"
+      }`}
     >
       <div
         className="container rounded-xl shadow-lg overflow-hidden max-w-6xl transition-all duration-300 bg-white dark:bg-gray-800"

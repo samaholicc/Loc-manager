@@ -1,6 +1,6 @@
-import React from "react";
-import { Routes, Route } from "react-router-dom";
-import { ThemeProvider } from "./context/ThemeContext"; // Updated import path
+import React, { useEffect } from "react";
+import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
+import { ThemeProvider } from "./context/ThemeContext";
 import Header from "./components/Header";
 import Dashboard from "./components/Dashboard";
 import Aside from "./components/Aside";
@@ -19,11 +19,17 @@ import ErrorPage from "./ErrorPage";
 import ComplaintsViewerOwner from "./components/ComplaintsViewerOwner";
 import RoomDetailsOwner from "./components/RoomDetailsOwner";
 import MaintenanceRequests from "./components/MaintenanceRequests";
-import EditProfile from "./components/EditProfile";
+import EditOwnProfile from "./components/EditOwnProfile";
+import EditUserProfile from "./components/EditUserProfile";
 import Verified from "./components/Verified";
-
+import UserManual from "./components/UserManual";
+import Support from "./components/Support";
+import ManagementPortal from "./components/ManagementPortal";
 
 function App() {
+  const navigate = useNavigate();
+  const location = useLocation();
+
   const forAdmin = [
     { label: "Accueil", path: "home" },
     { label: "Détails des locataires", path: "tenantdetails" },
@@ -32,20 +38,20 @@ function App() {
     { label: "Attribution d'une place de parking", path: "allottingparkingslot" },
     { label: "Plaintes", path: "complaints" },
     { label: "Demandes de maintenance", path: "maintenancerequests" },
-    { label: "Modifier le profil", path: "edit-profile" },
+    { label: "Modifier le profil", path: "/profile/edit" },
   ];
   const forEmployee = [
     { label: "Accueil", path: "home" },
     { label: "Plaintes", path: "complaints" },
     { label: "Demandes de maintenance", path: "maintenancerequests" },
-    { label: "Modifier le profil", path: "edit-profile" },
+    { label: "Modifier le profil", path: "/profile/edit" },
   ];
   const forTenant = [
     { label: "Accueil", path: "home" },
     { label: "Déposer une plainte", path: "raisingcomplaints" },
     { label: "Place de parking attribuée", path: "allotedparkingslot" },
     { label: "Payer l'entretien", path: "paymaintenance" },
-    { label: "Modifier le profil", path: "edit-profile" },
+    { label: "Modifier le profil", path: "/profile/edit" },
   ];
   const forOwner = [
     { label: "Accueil", path: "home" },
@@ -54,7 +60,7 @@ function App() {
     { label: "Créer un locataire", path: "createtenant" },
     { label: "Détails des chambres", path: "roomdetails" },
     { label: "Demandes de maintenance", path: "maintenancerequests" },
-    { label: "Modifier le profil", path: "edit-profile" },
+    { label: "Modifier le profil", path: "/profile/edit" },
   ];
 
   const getNavItems = () => {
@@ -76,6 +82,28 @@ function App() {
   const navItems = getNavItems();
   const basePath = JSON.parse(window.localStorage.getItem("whom"))?.userType || "";
 
+  // Redirect to the correct dashboard if the user is on the wrong route
+  useEffect(() => {
+    const userType = JSON.parse(window.localStorage.getItem("whom"))?.userType;
+    const currentPath = location.pathname.split("/")[1]; // e.g., "admin" from "/admin"
+
+    console.log("Current path:", currentPath, "User type:", userType);
+
+    // List of shared routes that all user types can access
+    const sharedRoutes = ["profile", "verified", "user-manual", "support", "management-portal"];
+
+    // Redirect if the user is on a user-type-specific route that doesn't match their userType
+    if (
+      userType &&
+      !sharedRoutes.includes(currentPath) &&
+      currentPath !== userType &&
+      currentPath !== "" // Allow the root path ("/") for the login page
+    ) {
+      console.log(`Redirecting from /${currentPath} to /${userType}`);
+      navigate(`/${userType}`, { replace: true });
+    }
+  }, [location, navigate]);
+
   return (
     <ThemeProvider>
       <div className="App font-mons background">
@@ -93,6 +121,7 @@ function App() {
               </main>
             }
           />
+          <Route path="/user-manual" element={<UserManual />} />
           <Route
             path="/employee"
             element={
@@ -105,6 +134,8 @@ function App() {
               </main>
             }
           />
+          <Route path="/management-portal" element={<ManagementPortal />} />
+          <Route path="/support" element={<Support />} />
           <Route
             path="/tenant"
             element={
@@ -226,13 +257,25 @@ function App() {
             }
           />
           <Route
-            path="/:userType/edit-profile"
+            path="/profile/edit"
             element={
               <main>
                 <Header forHam={[...navItems.map(item => item.label), "Déconnexion"]} />
                 <section className="dashboardSkeleton">
                   <Aside forHam={navItems} base={basePath} />
-                  <EditProfile />
+                  <EditOwnProfile />
+                </section>
+              </main>
+            }
+          />
+          <Route
+            path="/:userType/edit-profile/:id"
+            element={
+              <main>
+                <Header forHam={[...navItems.map(item => item.label), "Déconnexion"]} />
+                <section className="dashboardSkeleton">
+                  <Aside forHam={navItems} base={basePath} />
+                  <EditUserProfile />
                 </section>
               </main>
             }

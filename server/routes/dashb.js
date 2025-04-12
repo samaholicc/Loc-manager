@@ -2,6 +2,79 @@ const express = require("express");
 const router = express.Router();
 const db = require("../mysql_connect");
 
+// Dashboard route for employees
+router.post("/employee", async (req, res) => {
+  const { userId } = req.body;
+  try {
+    console.log("Received /dashboard/employee request with userId:", userId);
+
+    if (!userId) {
+      console.log("Missing userId in request body");
+      return res.status(400).json({ error: "Missing userId in request body" });
+    }
+
+    // Extract the numeric emp_id from userId (e.g., "e-701" -> 701)
+    const emp_id = parseInt(userId.split("-")[1]);
+    if (isNaN(emp_id)) {
+      console.log("Invalid userId format:", userId);
+      return res.status(400).json({ error: "Invalid userId format" });
+    }
+
+    console.log("Fetching employee data for emp_id:", emp_id);
+
+    const sql = "SELECT emp_name, salary, block_no, email, is_email_verified FROM employee WHERE emp_id = ?";
+    const results = await db.query(sql, [emp_id]);
+    console.log("Employee query result:", results);
+
+    if (!Array.isArray(results)) {
+      console.log("Employee query result is not an array:", results);
+      return res.status(500).json({ error: "Unexpected employee query result format" });
+    }
+
+    if (results.length === 0) {
+      console.log("No employee record found for emp_id:", emp_id);
+      return res.status(404).json({ error: "Employee not found for emp_id: " + emp_id });
+    }
+
+    const blockNo = results[0].block_no;
+    let blockName = "Inconnu";
+    if (blockNo) {
+      const blockSql = "SELECT block_name FROM block WHERE block_no = ?";
+      const blockResults = await db.query(blockSql, [blockNo]);
+      console.log("Block query result:", blockResults);
+
+      if (Array.isArray(blockResults) && blockResults.length > 0) {
+        blockName = blockResults[0].block_name || "Inconnu";
+      }
+    }
+
+    const totalComplaintSql = "SELECT COUNT(*) AS totalcomplaint FROM block WHERE complaints IS NOT NULL";
+    const complaintResult = await db.query(totalComplaintSql);
+    console.log("Total complaints:", complaintResult);
+
+    if (!Array.isArray(complaintResult) || complaintResult.length === 0) {
+      console.log("Total complaints query result is not valid:", complaintResult);
+      return res.status(500).json({ error: "Unexpected total complaints query result format" });
+    }
+
+    const employeeData = {
+      emp_name: results[0].emp_name,
+      salary: results[0].salary,
+      block_no: results[0].block_no,
+      block_name: blockName,
+      email: results[0].email || "",
+      is_email_verified: results[0].is_email_verified || false,
+      totalcomplaint: complaintResult[0].totalcomplaint,
+    };
+
+    res.json(employeeData);
+  } catch (err) {
+    console.error("Error fetching employee dashboard data:", err);
+    res.status(500).json({ error: "Error fetching employee dashboard data: " + err.message });
+  }
+});
+
+// Add other dashboard routes as needed (e.g., for admin, owner, tenant)
 router.post("/admin", async (req, res) => {
   const { userId } = req.body;
   if (!userId) {
@@ -36,91 +109,52 @@ router.post("/admin", async (req, res) => {
   }
 });
 
-
-
-
-router.post("/employee", async (req, res) => {
+// Add routes for owner and tenant if needed
+router.post("/owner", async (req, res) => {
   const { userId } = req.body;
+  if (!userId) {
+    return res.status(400).json({ error: "Missing userId in request body" });
+  }
+
   try {
-    // Debug: Log the userId
-    console.log("Fetching employee data for userId:", userId);
-
-    // Step 1: Fetch the auth ID
-    const authSql = "SELECT id FROM auth WHERE user_id = ?";
-    const authResults = await db.query(authSql, [userId]);
-    console.log("Auth query result:", authResults);
-
-    // Handle authResults as either an array or a single object
-    let authId;
-    if (Array.isArray(authResults)) {
-      if (authResults.length === 0) {
-        console.log("No auth record found for userId:", userId);
-        return res.status(404).json({ error: "Utilisateur non trouvé dans la table auth" });
-      }
-      authId = authResults[0].id;
-    } else if (authResults && typeof authResults === 'object' && 'id' in authResults) {
-      // If authResults is a single object
-      authId = authResults.id;
-    } else {
-      console.log("Unexpected auth query result format:", authResults);
-      return res.status(500).json({ error: "Unexpected auth query result format" });
+    const sql = `
+      SELECT owner_id, name, room_no, email, is_email_verified
+      FROM owner 
+      WHERE owner_id = ?
+    `;
+    const results = await db.query(sql, [userId]);
+    if (!results || results.length === 0) {
+      return res.status(404).json({ error: "Owner not found for userId: " + userId });
     }
-
-    console.log("Auth ID:", authId);
-
-    // Step 2: Fetch employee data, including email and is_email_verified
-    const sql = "SELECT emp_name, salary, block_no, email, is_email_verified FROM employee WHERE emp_id = ?";
-    const results = await db.query(sql, [authId]);
-    console.log("Employee query result:", results);
-
-    // Ensure results is an array
-    if (!Array.isArray(results)) {
-      console.log("Employee query result is not an array:", results);
-      return res.status(500).json({ error: "Unexpected employee query result format" });
-    }
-
-    if (results.length === 0) {
-      console.log("No employee record found for emp_id:", authId);
-      return res.status(404).json({ error: "Employee not found" });
-    }
-
-    // Step 3: Fetch block_name from the block table using block_no
-    const blockNo = results[0].block_no;
-    let blockName = "Inconnu";
-    if (blockNo) {
-      const blockSql = "SELECT block_name FROM block WHERE block_no = ?";
-      const blockResults = await db.query(blockSql, [blockNo]);
-      console.log("Block query result:", blockResults);
-
-      if (Array.isArray(blockResults) && blockResults.length > 0) {
-        blockName = blockResults[0].block_name || "Inconnu";
-      }
-    }
-
-    // Step 4: Fetch total complaints
-    const totalComplaintSql = "SELECT COUNT(*) AS totalcomplaint FROM block WHERE complaints IS NOT NULL";
-    const complaintResult = await db.query(totalComplaintSql);
-    console.log("Total complaints:", complaintResult);
-
-    // Ensure complaintResult is an array
-    if (!Array.isArray(complaintResult) || complaintResult.length === 0) {
-      console.log("Total complaints query result is not valid:", complaintResult);
-      return res.status(500).json({ error: "Unexpected total complaints query result format" });
-    }
-
-    // Step 5: Send response with email and is_email_verified
-    res.json({
-      emp_name: results[0].emp_name,
-      salary: results[0].salary,
-      block_no: results[0].block_no,
-      block_name: blockName,
-      email: results[0].email || "", // Include email
-      is_email_verified: results[0].is_email_verified || false, // Include verification status
-      totalcomplaint: complaintResult[0].totalcomplaint,
-    });
+    const totalcomplaint = await db.totalcomplaint();
+    res.json({ owner: results[0], totalcomplaint });
   } catch (err) {
     console.error("Erreur serveur:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
+
+router.post("/tenant", async (req, res) => {
+  const { userId } = req.body;
+  if (!userId) {
+    return res.status(400).json({ error: "Missing userId in request body" });
+  }
+
+  try {
+    const sql = `
+      SELECT tenant_id, name, dob, age, room_no, email, is_email_verified
+      FROM tenant 
+      WHERE tenant_id = ?
+    `;
+    const results = await db.query(sql, [userId]);
+    if (!results || results.length === 0) {
+      return res.status(404).json({ error: "Tenant not found for userId: " + userId });
+    }
+    res.json(results);
+  } catch (err) {
+    console.error("Erreur serveur:", err);
+    res.status(500).json({ error: "Erreur serveur: " + err.message });
+  }
+});
+
 module.exports = router;

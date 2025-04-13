@@ -1,12 +1,13 @@
-import axios from "axios";
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
+import axios from "axios"; // Re-import axios
 import { MdDeleteForever } from "react-icons/md";
 import { toast, ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import { useTheme } from "../context/ThemeContext";
 import { useNavigate } from "react-router-dom";
+import Particle from "./Particle"; // Import the Particle component
 
-function TenantDetails(props) {
+function TenantDetails({ tenantRows, tenantLoading, tenantError }) {
   const { darkMode } = useTheme();
   const navigate = useNavigate();
   const header = [
@@ -19,29 +20,13 @@ function TenantDetails(props) {
     { label: "Supprimer", key: null },
   ];
 
-  const [tenantRows, setTenantRows] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const [sortedRows, setSortedRows] = useState([]); // Local state for sorted rows
   const [sortConfig, setSortConfig] = useState({ key: null, direction: "asc" });
 
-  const getTenantRows = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      console.log("Server URL:", process.env.REACT_APP_SERVER);
-      const res = await axios.get(`${process.env.REACT_APP_SERVER}/tenantdetails`);
-      console.log("Tenant data from server:", res.data);
-      setTenantRows(res.data || []);
-    } catch (error) {
-      console.error("Error fetching tenants:", error);
-      const errorMessage =
-        error.response?.data?.message || "Échec de la récupération des données des locataires";
-      setError(errorMessage);
-      toast.error(errorMessage);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Update sortedRows when tenantRows changes
+  useEffect(() => {
+    setSortedRows([...tenantRows]); // Initialize with tenantRows prop
+  }, [tenantRows]);
 
   const deleteTenant = async (tenant_id) => {
     if (!window.confirm(`Êtes-vous sûr de vouloir supprimer le locataire ${tenant_id} ?`)) {
@@ -49,11 +34,12 @@ function TenantDetails(props) {
     }
     try {
       const res = await axios.post(`${process.env.REACT_APP_SERVER}/deletetenant`, {
-        userId: tenant_id,
+        userId: `t-${tenant_id}`,
       });
       if (res.status === 200) {
         toast.success("Locataire supprimé avec succès !");
-        getTenantRows();
+        // Fetch tenants again through App.jsx by reloading
+        window.location.reload(); // Temporary solution; ideally, call a prop function to refetch
       }
     } catch (error) {
       console.error("Error deleting tenant:", error);
@@ -71,12 +57,12 @@ function TenantDetails(props) {
     }
     setSortConfig({ key, direction });
 
-    const sortedRows = [...tenantRows].sort((a, b) => {
+    const sorted = [...sortedRows].sort((a, b) => {
       if (a[key] < b[key]) return direction === "asc" ? -1 : 1;
       if (a[key] > b[key]) return direction === "asc" ? 1 : -1;
       return 0;
     });
-    setTenantRows(sortedRows);
+    setSortedRows(sorted);
   };
 
   useEffect(() => {
@@ -86,20 +72,19 @@ function TenantDetails(props) {
       navigate("/login");
       return;
     }
-    getTenantRows();
   }, [navigate]);
 
-  // Debug darkMode state
   useEffect(() => {
     console.log("TenantDetails darkMode:", darkMode);
   }, [darkMode]);
 
   return (
     <section
-      className={`min-h-screen py-25 px-10 flex justify-center items-center ml-[1px] w-[calc(100%-1px)] transition-all duration-300 ${
+      className={`min-h-screen py-25 px-10 flex justify-center items-center ml-[1px] w-[calc(100%-1px)] transition-all duration-300 relative ${
         darkMode ? "bg-gray-900" : "bg-gray-100"
       }`}
     >
+      <Particle />
       <div
         className="container rounded-xl shadow-lg overflow-hidden max-w-6xl transition-all duration-300 bg-white dark:bg-gray-800"
       >
@@ -109,26 +94,26 @@ function TenantDetails(props) {
           >
             Liste des Locataires
           </h2>
-          {loading ? (
+          {tenantLoading ? (
             <div className="flex justify-center items-center py-10">
               <div
                 className="animate-spin rounded-full h-12 w-12 border-t-4 border-solid border-blue-500 dark:border-blue-400"
               ></div>
             </div>
-          ) : error ? (
+          ) : tenantError ? (
             <div
               className="text-center text-red-500 dark:text-red-400 text-lg font-medium p-5 bg-white dark:bg-gray-800"
             >
-              <p>{error}</p>
+              <p>{tenantError}</p>
               <button
-                onClick={getTenantRows}
+                onClick={() => window.location.reload()} // Temporary solution; ideally, call a prop function to refetch
                 className="mt-2 text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300"
                 aria-label="Réessayer de charger les données"
               >
                 Réessayer
               </button>
             </div>
-          ) : tenantRows.length === 0 ? (
+          ) : sortedRows.length === 0 ? (
             <div className="text-center py-10">
               <svg
                 className="mx-auto h-12 w-12 text-gray-400 dark:text-gray-500"
@@ -156,9 +141,7 @@ function TenantDetails(props) {
             <div className="overflow-x-auto">
               <table className="table-auto w-full border-collapse">
                 <thead>
-                  <tr
-                    className="bg-blue-600 dark:bg-blue-700 text-white"
-                  >
+                  <tr className="bg-blue-600 dark:bg-blue-700 text-white">
                     {header.map((headerItem, index) => (
                       <th
                         key={index}
@@ -178,39 +161,27 @@ function TenantDetails(props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {tenantRows.map((ele, index) => (
+                  {sortedRows.map((ele, index) => (
                     <tr
                       key={index}
                       className="border-b transition-colors border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700"
                     >
-                      <td
-                        className="py-4 px-3 text-center font-medium text-gray-800 dark:text-gray-200"
-                      >
-                        {ele.tenant_id}
+                      <td className="py-4 px-3 text-center font-medium text-gray-800 dark:text-gray-200">
+                        {`t-${ele.tenant_id}`}
                       </td>
-                      <td
-                        className="py-4 px-3 text-center font-medium text-gray-800 dark:text-gray-200"
-                      >
+                      <td className="py-4 px-3 text-center font-medium text-gray-800 dark:text-gray-200">
                         {ele.room_no}
                       </td>
-                      <td
-                        className="py-4 px-3 text-center font-medium text-gray-800 dark:text-gray-200"
-                      >
+                      <td className="py-4 px-3 text-center font-medium text-gray-800 dark:text-gray-200">
                         {ele.name}
                       </td>
-                      <td
-                        className="py-4 px-3 text-center font-medium text-gray-800 dark:text-gray-200"
-                      >
+                      <td className="py-4 px-3 text-center font-medium text-gray-800 dark:text-gray-200">
                         {ele.age}
                       </td>
-                      <td
-                        className="py-4 px-3 text-center font-medium text-gray-800 dark:text-gray-200"
-                      >
+                      <td className="py-4 px-3 text-center font-medium text-gray-800 dark:text-gray-200">
                         {ele.dob}
                       </td>
-                      <td
-                        className="py-4 px-3 text-center font-medium text-gray-800 dark:text-gray-200"
-                      >
+                      <td className="py-4 px-3 text-center font-medium text-gray-800 dark:text-gray-200">
                         {ele.stat || "N/A"}
                       </td>
                       <td className="py-4 px-3 text-center">

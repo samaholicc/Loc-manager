@@ -13,8 +13,7 @@ router.post("/employee", async (req, res) => {
       return res.status(400).json({ error: "Missing userId in request body" });
     }
 
-    // Extract the numeric emp_id from userId (e.g., "e-701" -> 701)
-    const emp_id = parseInt(userId.split("-")[1]);
+    const emp_id = parseInt(userId.split("-")[1] || userId);
     if (isNaN(emp_id)) {
       console.log("Invalid userId format:", userId);
       return res.status(400).json({ error: "Invalid userId format" });
@@ -74,7 +73,7 @@ router.post("/employee", async (req, res) => {
   }
 });
 
-// Add other dashboard routes as needed (e.g., for admin, owner, tenant)
+// Dashboard route for admins
 router.post("/admin", async (req, res) => {
   const { userId } = req.body;
   if (!userId) {
@@ -109,7 +108,7 @@ router.post("/admin", async (req, res) => {
   }
 });
 
-// Add routes for owner and tenant if needed
+// Dashboard route for owners
 router.post("/owner", async (req, res) => {
   const { userId } = req.body;
   if (!userId) {
@@ -117,23 +116,25 @@ router.post("/owner", async (req, res) => {
   }
 
   try {
+    const numericId = parseInt(userId.split("-")[1] || userId);
     const sql = `
       SELECT owner_id, name, room_no, email, is_email_verified
       FROM owner 
       WHERE owner_id = ?
     `;
-    const results = await db.query(sql, [userId]);
+    const results = await db.query(sql, [numericId]);
     if (!results || results.length === 0) {
-      return res.status(404).json({ error: "Owner not found for userId: " + userId });
+      return res.status(404).json({ error: "Owner not found for userId: " + numericId });
     }
     const totalcomplaint = await db.totalcomplaint();
     res.json({ owner: results[0], totalcomplaint });
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /dashboard/owner:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
 
+// Dashboard route for tenants
 router.post("/tenant", async (req, res) => {
   const { userId } = req.body;
   if (!userId) {
@@ -141,18 +142,19 @@ router.post("/tenant", async (req, res) => {
   }
 
   try {
+    const numericId = parseInt(userId.split("-")[1] || userId);
     const sql = `
       SELECT tenant_id, name, dob, age, room_no, email, is_email_verified
       FROM tenant 
       WHERE tenant_id = ?
     `;
-    const results = await db.query(sql, [userId]);
+    const results = await db.query(sql, [numericId]);
     if (!results || results.length === 0) {
-      return res.status(404).json({ error: "Tenant not found for userId: " + userId });
+      return res.status(404).json({ error: "Tenant not found for userId: " + numericId });
     }
     res.json(results);
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /dashboard/tenant:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });

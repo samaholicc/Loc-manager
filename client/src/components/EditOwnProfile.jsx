@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { toast } from "react-toastify";
@@ -6,6 +6,8 @@ import "react-toastify/dist/ReactToastify.css";
 import { motion } from "framer-motion";
 import { FaUser, FaEnvelope, FaLock, FaHome, FaPhone, FaCalendarAlt, FaSignOutAlt } from "react-icons/fa";
 import { useTheme } from "../context/ThemeContext";
+import Particle from "./Particle"; // Import the Particle component
+
 
 // Reusable Input Component
 const InputField = ({ label, error, icon: Icon, ...props }) => (
@@ -27,6 +29,7 @@ const InputField = ({ label, error, icon: Icon, ...props }) => (
           : "bg-gray-50 text-gray-800 border-gray-300 placeholder-gray-400"
       } ${props.disabled ? (props.darkMode ? "bg-gray-600 cursor-not-allowed" : "bg-gray-100 cursor-not-allowed") : ""}`}
       {...props}
+      aria-label={label}
     />
     {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
   </div>
@@ -52,6 +55,7 @@ const SelectField = ({ label, error, icon: Icon, children, ...props }) => (
           : "bg-gray-50 text-gray-800 border-gray-300"
       }`}
       {...props}
+      aria-label={label}
     >
       {children}
     </select>
@@ -86,31 +90,31 @@ function EditOwnProfile() {
   const userId = whom?.username;
 
   // Debounce toast notifications to prevent multiple toasts
-  const debounceToast = (message, type = "error", options = {}) => {
+  const debounceToast = useCallback((message, type = "error", options = {}) => {
     const toastId = message;
     if (!toast.isActive(toastId)) {
       toast[type](message, { ...options, toastId });
     }
-  };
+  }, []);
 
-  const fetchUserData = async () => {
+  const fetchUserData = useCallback(async () => {
     if (!whom || !userType || !userId) {
       debounceToast("Utilisateur non connecté. Veuillez vous connecter.");
       navigate("/login");
       return;
     }
-  
+
     const validUserTypes = ["admin", "owner", "tenant", "employee"];
     if (!validUserTypes.includes(userType)) {
       debounceToast("Type d'utilisateur invalide.");
       navigate("/login");
       return;
     }
-  
+
     try {
       let endpoint;
       let requestBody;
-  
+
       if (userType === "admin") {
         endpoint = "/block_admin";
         requestBody = { admin_id: parseInt(userId.substring(2)) };
@@ -118,19 +122,20 @@ function EditOwnProfile() {
         endpoint = "/dashboard/employee";
         requestBody = { userId }; // Send the full userId (e.g., "e-701")
       } else {
-        endpoint = `/${userType}`;
-        requestBody = { [`${userType}_id`]: parseInt(userId.substring(2)) };
+        endpoint = `/dashboard/${userType}`;
+        requestBody = { userId }; // Use userId directly
       }
-  
+
       console.log("Fetching user data with endpoint:", endpoint, "and body:", requestBody);
-  
+
       const response = await axios.post(`${process.env.REACT_APP_SERVER}${endpoint}`, requestBody);
-  
+      console.log("User data response:", response.data);
+
       const userData = userType === "admin" ? response.data : response.data[0] || response.data.owner || response.data;
       if (!userData) {
         throw new Error("Utilisateur non trouvé.");
       }
-  
+
       setFormData({
         name: userData.name || userData.admin_name || userData.emp_name || "",
         block_no: userData.block_no || "",
@@ -145,10 +150,14 @@ function EditOwnProfile() {
       setIsEmailVerified(!!userData.is_email_verified);
       console.log("isEmailVerified set to:", !!userData.is_email_verified);
     } catch (error) {
-      console.error("Erreur lors de la récupération des données:", error);
+      console.error("Erreur lors de la récupération des données:", {
+        message: error.message,
+        status: error.response?.status,
+        data: error.response?.data,
+      });
       debounceToast("Erreur lors de la récupération des données : " + (error.response?.data?.error || error.message));
     }
-  };
+  }, [whom, userType, userId, navigate, debounceToast]);
 
   useEffect(() => {
     if (!hasFetched) {
@@ -162,6 +171,7 @@ function EditOwnProfile() {
           userId,
           userType,
         });
+        console.log("Notifications response:", notificationsRes.data);
         setNotifications(notificationsRes.data);
       } catch (error) {
         console.error("Error fetching notifications:", error.response?.data || error.message);
@@ -172,6 +182,7 @@ function EditOwnProfile() {
     const fetchAvailableBlocks = async () => {
       try {
         const res = await axios.get(`${process.env.REACT_APP_SERVER}/available-blocks`);
+        console.log("Available blocks response:", res.data);
         setAvailableBlocks(res.data);
       } catch (error) {
         console.error("Error fetching available blocks:", error.response?.data?.error || error.message);
@@ -195,7 +206,7 @@ function EditOwnProfile() {
     return () => {
       window.removeEventListener("focus", handleFocus);
     };
-  }, [navigate, userType, userId]);
+  }, [navigate, userType, userId, hasFetched, fetchUserData, debounceToast]);
 
   const validateField = (name, value) => {
     const validators = {
@@ -214,7 +225,7 @@ function EditOwnProfile() {
       },
       block_no: (v) => {
         if (userType !== "admin" && userType !== "employee") return "";
-        return !v || !availableBlocks.some(block => block.block_no === parseInt(v))
+        return !v || !availableBlocks.some(block => block.block_no === v)
           ? "Veuillez sélectionner un numéro de bloc valide"
           : "";
       },
@@ -280,7 +291,7 @@ function EditOwnProfile() {
         block_no: formData.block_no,
         email: formData.email,
         phone: formData.phone,
-        password: formData.password,
+        password: formData.password || undefined,
         name: formData.name,
         room_no: formData.room_no,
         age: formData.age,
@@ -292,10 +303,14 @@ function EditOwnProfile() {
           navigate("/login");
         }, 2000);
       } else {
-        navigate(userType === "admin" ? "/management-portal" : "/");
+        navigate(userType === "admin" ? "/management-portal" : "/dashboard");
       }
     } catch (error) {
-      console.error("Erreur lors de la mise à jour du profil:", error);
+      console.error("Erreur lors de la mise à jour du profil:", {
+        message: error.message,
+        status: error.response?.status,
+        data: error.response?.data,
+      });
       debounceToast("Erreur lors de la mise à jour du profil : " + (error.response?.data?.error || error.message));
     } finally {
       setLoading(false);
@@ -304,14 +319,18 @@ function EditOwnProfile() {
 
   const resendVerificationEmail = async () => {
     try {
-      await axios.post(`${process.env.REACT_APP_SERVER}/resend-verification`, {
+      const response = await axios.post(`${process.env.REACT_APP_SERVER}/resend-verification`, {
         userId,
         userType,
       });
-      debounceToast("E-mail de vérification renvoyé. Veuillez vérifier votre boîte de réception.", "success");
+      debounceToast(response.data.message, "success");
       await fetchUserData();
     } catch (error) {
-      console.error("Erreur lors de l'envoi de l'e-mail:", error);
+      console.error("Erreur lors de l'envoi de l'e-mail:", {
+        message: error.message,
+        status: error.response?.status,
+        data: error.response?.data,
+      });
       const errorMessage = error.response?.data?.error || error.message;
       if (errorMessage === "Email is already verified") {
         debounceToast("Votre e-mail est déjà vérifié.", "info");
@@ -325,21 +344,27 @@ function EditOwnProfile() {
 
   const handleLogout = async () => {
     try {
-      await axios.post(`${process.env.REACT_APP_SERVER}/logout`);
+      // Attempt to call the logout endpoint
+      await axios.post(`${process.env.REACT_APP_SERVER}/logout`, { userId });
+    } catch (error) {
+      console.warn("Logout endpoint failed:", error.response?.data?.error || error.message);
+      // Proceed with client-side logout if endpoint fails
+    } finally {
+      // Clear localStorage and navigate to login
       window.localStorage.removeItem("whom");
       debounceToast("Déconnexion réussie", "success");
       navigate("/login");
-    } catch (error) {
-      debounceToast("Erreur lors de la déconnexion : " + (error.response?.data?.error || error.message));
     }
   };
 
   return (
     <div
-      className={`min-h-screen w-full flex items-center justify-center transition-all duration-300 ${
-        darkMode ? "bg-gray-900" : "bg-gray-100"
+      className={`min-h-screen w-full flex items-center justify-center transition-all duration-300 relative ${
+        darkMode ? "bg-gray-900" : "bg-gray-100 " 
       }`}
-    >
+    > 
+      <Particle />
+      <div className="relative z-20">
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -439,6 +464,7 @@ function EditOwnProfile() {
                 type="button"
                 onClick={resendVerificationEmail}
                 className="mt-1 text-sm text-blue-500 hover:underline"
+                aria-label="Renvoyer l'e-mail de vérification"
               >
                 Renvoyer l'e-mail de vérification
               </button>
@@ -459,7 +485,7 @@ function EditOwnProfile() {
           </section>
 
           {/* Location Details */}
-          {(userType === "admin" || userType === "employee" || userType === "tenant") && (
+          {(userType === "admin" || userType === "employee" ) && (
             <section className="mb-6">
               <h2
                 className={`text-lg font-semibold mb-3 border-b-2 pb-1 flex items-center ${
@@ -487,19 +513,7 @@ function EditOwnProfile() {
                   ))}
                 </SelectField>
               )}
-              {userType === "tenant" && (
-                <InputField
-                  label="Numéro de chambre"
-                  type="text"
-                  name="room_no"
-                  value={formData.room_no}
-                  onChange={handleChange}
-                  placeholder="Entrez le numéro de chambre"
-                  error={errors.room_no}
-                  icon={FaHome}
-                  darkMode={darkMode}
-                />
-              )}
+              
             </section>
           )}
 
@@ -549,6 +563,7 @@ function EditOwnProfile() {
                   ? "bg-indigo-600 text-white hover:bg-indigo-700"
                   : "bg-indigo-600 text-white hover:bg-indigo-700"
               }`}
+              aria-label="Enregistrer les modifications"
             >
               {loading ? (
                 <svg className="animate-spin h-4 w-4 mr-2 text-white" viewBox="0 0 24 24">
@@ -574,6 +589,7 @@ function EditOwnProfile() {
                   ? "bg-red-600 text-white hover:bg-red-700"
                   : "bg-red-500 text-white hover:bg-red-600"
               }`}
+              aria-label="Déconnexion"
             >
               <FaSignOutAlt className="mr-2" />
               Déconnexion
@@ -581,6 +597,7 @@ function EditOwnProfile() {
           </div>
         </form>
       </motion.div>
+    </div>
     </div>
   );
 }

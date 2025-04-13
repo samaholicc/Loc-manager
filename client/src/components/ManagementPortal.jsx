@@ -6,7 +6,7 @@ import "react-toastify/dist/ReactToastify.css";
 import { motion } from "framer-motion";
 import { useTheme } from "../context/ThemeContext";
 import {
-  FaUser, FaUsers, FaBriefcase, FaChartBar, FaServer, FaArrowLeft, FaPlus, FaEdit, FaTrash, FaExclamationCircle
+  FaUser, FaUsers, FaBriefcase, FaChartBar, FaServer, FaArrowLeft, FaPlus, FaEdit, FaTrash, FaExclamationCircle, FaSortUp, FaSortDown, FaFilter
 } from "react-icons/fa";
 import { Chart, BarController, BarElement, CategoryScale, LinearScale, Title, Tooltip, Legend } from "chart.js";
 
@@ -17,6 +17,7 @@ function ManagementPortal() {
   const { darkMode } = useTheme();
   const navigate = useNavigate();
   const [users, setUsers] = useState([]);
+  const [filteredUsers, setFilteredUsers] = useState([]);
   const [analytics, setAnalytics] = useState({
     totalUsers: 0,
     totalAdmins: 0,
@@ -32,6 +33,8 @@ function ManagementPortal() {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: "asc" });
+  const [filter, setFilter] = useState({ type: "", name: "" });
   const chartRef = useRef(null);
 
   useEffect(() => {
@@ -51,8 +54,10 @@ function ManagementPortal() {
           axios.get(`${process.env.REACT_APP_SERVER}/systemstatus`),
         ]);
 
-        console.log("Fetched users:", usersResponse.data); // Log the fetched users
-        setUsers(usersResponse.data.filter(user => user.id && user.type)); // Filter out invalid users
+        console.log("Fetched users:", usersResponse.data);
+        const validUsers = usersResponse.data.filter(user => user.id && user.type);
+        setUsers(validUsers);
+        setFilteredUsers(validUsers);
         setAnalytics({
           totalUsers: analyticsResponse.data.totalUsers || 0,
           totalAdmins: analyticsResponse.data.totalAdmins || 0,
@@ -178,10 +183,44 @@ function ManagementPortal() {
       });
       toast.success("Utilisateur supprimé avec succès.");
       setUsers(users.filter((user) => user.id !== userId || user.type !== userType));
+      setFilteredUsers(filteredUsers.filter((user) => user.id !== userId || user.type !== userType));
     } catch (error) {
       console.error("Error deleting user:", error);
       toast.error(error.response?.data?.error || error.message || "Erreur lors de la suppression de l'utilisateur.");
     }
+  };
+
+  const handleSort = (key) => {
+    let direction = "asc";
+    if (sortConfig.key === key && sortConfig.direction === "asc") {
+      direction = "desc";
+    }
+    setSortConfig({ key, direction });
+
+    const sortedUsers = [...filteredUsers].sort((a, b) => {
+      if (a[key] < b[key]) return direction === "asc" ? -1 : 1;
+      if (a[key] > b[key]) return direction === "asc" ? 1 : -1;
+      return 0;
+    });
+    setFilteredUsers(sortedUsers);
+  };
+
+  const handleFilter = () => {
+    let filtered = [...users];
+    if (filter.type) {
+      filtered = filtered.filter((user) => user.type.toLowerCase() === filter.type.toLowerCase());
+    }
+    if (filter.name) {
+      filtered = filtered.filter((user) =>
+        user.name.toLowerCase().includes(filter.name.toLowerCase())
+      );
+    }
+    setFilteredUsers(filtered);
+  };
+
+  const handleFilterChange = (e) => {
+    const { name, value } = e.target;
+    setFilter((prev) => ({ ...prev, [name]: value }));
   };
 
   const renderSkeletonLoader = () => (
@@ -310,6 +349,42 @@ function ManagementPortal() {
           <FaUsers className="text-blue-500" />
           Gestion des Utilisateurs
         </h2>
+        {/* Filters */}
+        <div className="flex flex-wrap gap-4 mb-4">
+          <div className="flex items-center gap-2">
+            <FaFilter className="text-gray-500" />
+            <select
+              name="type"
+              value={filter.type}
+              onChange={handleFilterChange}
+              onBlur={handleFilter}
+              className={`p-2 border rounded text-sm focus:ring-2 focus:ring-blue-500 transition-all duration-300 ${
+                darkMode ? "bg-gray-700 text-gray-200 border-gray-600" : "bg-white text-gray-800 border-gray-300"
+              }`}
+            >
+              <option value="">Tous les types</option>
+              <option value="admin">Admin</option>
+              <option value="owner">Propriétaire</option>
+              <option value="tenant">Locataire</option>
+              <option value="employee">Employé</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <FaFilter className="text-gray-500" />
+            <input
+              type="text"
+              name="name"
+              value={filter.name}
+              onChange={handleFilterChange}
+              onBlur={handleFilter}
+              placeholder="Filtrer par nom"
+              className={`p-2 border rounded text-sm focus:ring-2 focus:ring-blue-500 transition-all duration-300 ${
+                darkMode ? "bg-gray-700 text-gray-200 border-gray-600" : "bg-white text-gray-800 border-gray-300"
+              }`}
+            />
+          </div>
+        </div>
+
         {loading ? (
           renderSkeletonLoader()
         ) : error ? (
@@ -317,23 +392,59 @@ function ManagementPortal() {
             <FaExclamationCircle className="inline-block mr-2" />
             {error}
           </div>
-        ) : users.length === 0 ? (
+        ) : filteredUsers.length === 0 ? (
           renderEmptyPlaceholder("Aucun utilisateur trouvé.")
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-gray-100 dark:bg-gray-700">
-                  <th className="p-3 text-sm font-semibold tracking-wide">ID</th>
-                  <th className="p-3 text-sm font-semibold tracking-wide">Type</th>
-                  <th className="p-3 text-sm font-semibold tracking-wide">Nom</th>
+                  <th
+                    className="p-3 text-sm font-semibold tracking-wide cursor-pointer"
+                    onClick={() => handleSort("id")}
+                  >
+                    <div className="flex items-center">
+                      ID
+                      {sortConfig.key === "id" && (
+                        <span className="ml-1">
+                          {sortConfig.direction === "asc" ? <FaSortUp /> : <FaSortDown />}
+                        </span>
+                      )}
+                    </div>
+                  </th>
+                  <th
+                    className="p-3 text-sm font-semibold tracking-wide cursor-pointer"
+                    onClick={() => handleSort("type")}
+                  >
+                    <div className="flex items-center">
+                      Type
+                      {sortConfig.key === "type" && (
+                        <span className="ml-1">
+                          {sortConfig.direction === "asc" ? <FaSortUp /> : <FaSortDown />}
+                        </span>
+                      )}
+                    </div>
+                  </th>
+                  <th
+                    className="p-3 text-sm font-semibold tracking-wide cursor-pointer"
+                    onClick={() => handleSort("name")}
+                  >
+                    <div className="flex items-center">
+                      Nom
+                      {sortConfig.key === "name" && (
+                        <span className="ml-1">
+                          {sortConfig.direction === "asc" ? <FaSortUp /> : <FaSortDown />}
+                        </span>
+                      )}
+                    </div>
+                  </th>
                   <th className="p-3 text-sm font-semibold tracking-wide">Email</th>
                   <th className="p-3 text-sm font-semibold tracking-wide">Bloc</th>
                   <th className="p-3 text-sm font-semibold tracking-wide">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {users.map((user, index) => (
+                {filteredUsers.map((user, index) => (
                   <tr
                     key={index}
                     className={`border-b dark:border-gray-700 ${

@@ -6,6 +6,8 @@ import "react-toastify/dist/ReactToastify.css";
 import { motion } from "framer-motion";
 import { FaUser, FaEnvelope, FaLock, FaHome, FaPhone, FaCalendarAlt, FaSignOutAlt } from "react-icons/fa";
 import { useTheme } from "../context/ThemeContext";
+import Particle from "./Particle"; // Import the Particle component
+
 
 // Reusable Input Component
 const InputField = ({ label, error, icon: Icon, ...props }) => (
@@ -413,7 +415,8 @@ function EditUserProfile() {
       className={`min-h-screen w-full flex items-center justify-center transition-all duration-300 ${
         darkMode ? "bg-gray-900" : "bg-gray-100"
       }`}
-    >
+    > 
+      <Particle />
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}

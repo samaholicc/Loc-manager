@@ -1,4 +1,3 @@
-import axios from "axios";
 import React, { useContext, useState, useEffect, useCallback, useRef } from "react";
 import { HamContext } from "../HamContextProvider";
 import { useTheme } from "../context/ThemeContext";
@@ -13,10 +12,11 @@ import {
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
 import { Chart, LineController, LineElement, PointElement, LinearScale, CategoryScale, PieController, ArcElement } from "chart.js";
+import axios from "axios";
 
 Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, PieController, ArcElement);
 
-function Dashboard({ navItems, basePath }) {
+function Dashboard({ navItems, basePath, tenantRows, tenantLoading, tenantError }) {
   const { hamActive, hamHandler } = useContext(HamContext);
   const navigate = useNavigate();
   const { darkMode } = useTheme();
@@ -47,6 +47,7 @@ function Dashboard({ navItems, basePath }) {
   const chartRef = useRef(null);
   const userDistributionChartRef = useRef(null);
   const canvasRef = useRef(null);
+  const [forceUpdate, setForceUpdate] = useState(0);
 
   // Email writer state for employee
   const [emailForm, setEmailForm] = useState({
@@ -60,6 +61,7 @@ function Dashboard({ navItems, basePath }) {
 
   const userType = JSON.parse(window.localStorage.getItem("whom"))?.userType || "";
   const userId = JSON.parse(window.localStorage.getItem("whom"))?.username || "";
+  console.log("User type on mount:", userType, "User ID:", userId);
 
   const [systemStatus, setSystemStatus] = useState({
     uptime: "0%",
@@ -469,6 +471,9 @@ function Dashboard({ navItems, basePath }) {
     { name: "Manuel de l'utilisateur", icon: <FaBook />, url: "/user-manual" },
     { name: "Contacter le support", icon: <FaHeadset />, url: "/support" },
     { name: "Portail de gestion", icon: <FaLink />, url: "/management-portal" },
+    { name: "Voir les plaintes", icon: <FaExclamationTriangle />, url: "/owner/complaint", userType: "owner" },
+    { name: "Voir les détails des chambres", icon: <FaFileAlt />, url: "/owner/roomdetails", userType: "owner" },
+    { name: "Voir les demandes de maintenance", icon: <FaWrench />, url: "/owner/maintenancerequests", userType: "owner" },
   ];
 
   const renderEmptyPlaceholder = (message) => (
@@ -568,7 +573,11 @@ function Dashboard({ navItems, basePath }) {
       const response = await axios.post(`${process.env.REACT_APP_SERVER}/paymentstatus`, { userId });
       setTenantPaymentStatus(response.data);
     } catch (error) {
-      console.error("Error fetching tenant payment status:", error.response?.data || error.message);
+      console.error("Error fetching tenant payment status:", {
+        message: error.message,
+        status: error.response?.status,
+        data: error.response?.data,
+      });
       toast.error("Erreur lors de la récupération du statut de paiement.");
     }
   }, [userType, userId]);
@@ -577,13 +586,15 @@ function Dashboard({ navItems, basePath }) {
     if (userType !== "owner") return;
     try {
       const response = await axios.post(`${process.env.REACT_APP_SERVER}/tenantoverview`, { userId });
+      console.log("Tenant overview response:", response.data);
       setTenantOverview({
         totalTenants: response.data.totalTenants || 0,
         activeLeases: response.data.activeLeases || 0,
       });
     } catch (error) {
       console.error("Error fetching tenant overview:", error.response?.data || error.message);
-      toast.error("Erreur lors de la récupération de l'aperçu des locataires.");
+      toast.error("Erreur lors de la récupération des locataires.");
+      setTenantOverview({ totalTenants: 0, activeLeases: 0 });
     }
   }, [userType, userId]);
 
@@ -612,130 +623,119 @@ function Dashboard({ navItems, basePath }) {
     }
   }, [fetchRequests, fetchUsersForMessaging, fetchPendingTasks, fetchTenantPaymentStatus, fetchTenantOverview, userType]);
 
-  const getBoxInfo = async () => {
+  const getBoxInfo = useCallback(async () => {
     setLoading(true);
     setError(null);
-    setUserDetails({});
+    setUserDetails(null);
     setUserName("Utilisateur");
     try {
       const whomData = JSON.parse(window.localStorage.getItem("whom"));
       const whom = whomData?.userType;
       const userId = whomData?.username;
       const adminId = whomData?.adminId;
-  
+
       if (!whom || !userId) {
-        setError("Utilisateur non connecté. Veuillez vous connecter.");
-        return;
+        throw new Error("Utilisateur non connecté. Veuillez vous connecter.");
       }
-  
+      if (!["admin", "owner", "employee", "tenant"].includes(whom)) {
+        throw new Error("Type d'utilisateur invalide.");
+      }
+      if (typeof userId !== "string") {
+        throw new Error("Invalid userId format: userId must be a string.");
+      }
+
+      console.log("Fetching dashboard data for:", { whom, userId, adminId });
+
+      const dashboardPromise = axios.post(`${process.env.REACT_APP_SERVER}/dashboard/${whom}`, { userId })
+        .catch(err => {
+          console.error(`/dashboard/${whom} failed:`, err.response?.data || err.message);
+          throw err;
+        });
+
+      const activitiesPromise = ["tenant", "owner", "admin"].includes(whom)
+        ? axios.post(`${process.env.REACT_APP_SERVER}/recentactivities`, { userId, userType: whom })
+            .then(response => {
+              console.log("Recent activities response:", response.data);
+              return response;
+            })
+            .catch(err => {
+              console.error("/recentactivities failed:", err.response?.data || err.message);
+              throw err;
+            })
+        : Promise.resolve({ data: [] });
+
+      const notificationsPromise = ["tenant", "owner", "admin"].includes(whom)
+        ? axios.post(`${process.env.REACT_APP_SERVER}/notifications`, { userId, userType: whom })
+            .catch(err => {
+              console.error("/notifications failed:", err.response?.data || err.message);
+              throw err;
+            })
+        : Promise.resolve({ data: [] });
+
+      const adminPromise = whom === "admin" && adminId
+        ? axios.post(`${process.env.REACT_APP_SERVER}/block_admin`, { admin_id: adminId })
+            .catch(err => {
+              console.error("/block_admin failed:", err.response?.data || err.message);
+              throw err;
+            })
+        : Promise.resolve({ data: { admin_name: "Inconnu", block_no: "N/A" } });
+
+      const complaintsPromise = whom === "owner"
+        ? axios.post(`${process.env.REACT_APP_SERVER}/ownercomplaints`, { userId })
+            .then(response => {
+              console.log("Owner complaints response:", response.data);
+              return response;
+            })
+            .catch(err => {
+              console.error("/ownercomplaints failed:", err.response?.data || err.message);
+              throw err;
+            })
+        : Promise.resolve({ data: [] });
+
+      const paymentPromise = whom === "tenant"
+        ? axios.post(`${process.env.REACT_APP_SERVER}/paymentstatus`, { userId })
+            .catch(err => {
+              console.error("/paymentstatus failed:", err.response?.data || err.message);
+              throw err;
+            })
+        : Promise.resolve({ data: null });
+
       const [dashboardRes, activitiesRes, notificationsRes, adminRes, complaintsRes, paymentRes] = await Promise.all([
-        axios.post(`${process.env.REACT_APP_SERVER}/dashboard/${whom}`, { userId }),
-        ["tenant", "owner", "admin"].includes(whom)
-          ? axios.post(`${process.env.REACT_APP_SERVER}/recentactivities`, { userId, userType: whom })
-          : Promise.resolve({ data: [] }),
-        ["tenant", "owner", "admin"].includes(whom)
-          ? axios.post(`${process.env.REACT_APP_SERVER}/notifications`, { userId, userType: whom })
-          : Promise.resolve({ data: [] }),
-        whom === "admin" && adminId
-          ? axios.post(`${process.env.REACT_APP_SERVER}/block_admin`, { admin_id: adminId })
-          : Promise.resolve({ data: { admin_name: "Inconnu", block_no: "N/A" } }),
-        ["owner", "tenant"].includes(whom)
-          ? axios.post(`${process.env.REACT_APP_SERVER}/ownercomplaints`, { userId })
-          : Promise.resolve({ data: [] }),
-        whom === "tenant"
-          ? axios.post(`${process.env.REACT_APP_SERVER}/paymentstatus`, { userId })
-          : Promise.resolve({ data: null }),
+        dashboardPromise,
+        activitiesPromise,
+        notificationsPromise,
+        adminPromise,
+        complaintsPromise,
+        paymentPromise,
       ]);
-  
+
       let boxData = [];
-      if (whom === "admin") {
-        boxData = [
-          { label: "Total propriétaires", value: dashboardRes.data.totalowner || 0, icon: <FaUser /> },
-          { label: "Total locataires", value: dashboardRes.data.totaltenant || 0, icon: <FaUsers /> },
-          { label: "Total employés", value: dashboardRes.data.totalemployee || 0, icon: <FaBriefcase /> },
-          { label: "Demandes en attente", value: quickStats.pendingRequests || 0, icon: <FaExclamationTriangle /> },
-        ];
-        setUserDetails({
-          name: adminRes.data.admin_name || "Inconnu",
-          block_no: adminRes.data.block_no || "N/A",
-        });
-        setUserName(adminRes.data.admin_name || "Utilisateur");
-  
-        const totalUsers = (dashboardRes.data.totalowner || 0) + (dashboardRes.data.totaltenant || 0) + (dashboardRes.data.totalemployee || 0);
-        const ownerPercentage = totalUsers > 0 ? ((dashboardRes.data.totalowner / totalUsers) * 100).toFixed(1) : 0;
-        const tenantPercentage = totalUsers > 0 ? ((dashboardRes.data.totaltenant / totalUsers) * 100).toFixed(1) : 0;
-        const employeePercentage = totalUsers > 0 ? ((dashboardRes.data.totalemployee / totalUsers) * 100).toFixed(1) : 0;
-  
-        setUserStatsData({
-          totalUsers,
-          averageOwnerAge: parseFloat(dashboardRes.data.avgOwnerAge || 0).toFixed(1),
-          averageTenantAge: parseFloat(dashboardRes.data.avgTenantAge || 0).toFixed(1),
-          averageEmployeeAge: parseFloat(dashboardRes.data.avgEmployeeAge || 0).toFixed(1),
-          activeOwners: dashboardRes.data.activeOwners || 0,
-          activeTenants: dashboardRes.data.activeTenants || 0,
-          activeEmployees: dashboardRes.data.activeEmployees || 0,
-          ownerPercentage,
-          tenantPercentage,
-          employeePercentage,
-        });
-      } else if (whom === "owner") {
+      if (whom === "owner") {
         boxData = [
           { label: "Nombre d'employés", value: dashboardRes.data.totalemployee || 0, icon: <FaUsers /> },
           { label: "Nombre total de plaintes", value: dashboardRes.data.totalcomplaint || 0, icon: <FaExclamationTriangle /> },
         ];
         setUserDetails(dashboardRes.data.owner || {});
         setUserName(dashboardRes.data.owner?.name || "Utilisateur");
-      } else if (whom === "employee") {
-        boxData = [
-          { label: "Nombre total de plaintes", value: dashboardRes.data.totalcomplaint || 0, icon: <FaExclamationTriangle /> },
-          { label: "Salaire", value: "Euros " + (dashboardRes.data.salary || "0"), icon: <FaMoneyBillWave /> },
-        ];
-        setUserDetails({
-          name: dashboardRes.data.emp_name || "Inconnu",
-          block_no: dashboardRes.data.block_no || "N/A",
-          block_name: dashboardRes.data.block_name || "Inconnu",
-        });
-        setUserName(dashboardRes.data.emp_name || "Utilisateur");
-      } else if (whom === "tenant") {
-        boxData = [
-          { label: "ID locataire", value: dashboardRes.data[0]?.tenant_id ? `t-${dashboardRes.data[0].tenant_id}` : "N/A", icon: <FaUser /> },
-          { label: "Nom du locataire", value: dashboardRes.data[0]?.name || "Inconnu", icon: <FaUser /> },
-          { label: "Âge du locataire", value: dashboardRes.data[0]?.age || "Inconnu", icon: <FaUser /> },
-          { label: "Date de naissance", value: dashboardRes.data[0]?.dob || "Inconnu", icon: <FaUser /> },
-        ];
-        try {
-          const blockRes = await axios.post(`${process.env.REACT_APP_SERVER}/block`, { room_no: dashboardRes.data[0]?.room_no });
-          setUserDetails({
-            name: dashboardRes.data[0]?.name || "Inconnu",
-            block_no: blockRes.data.block_no || "N/A",
-            block_name: blockRes.data.block_name || "Inconnu",
-            room_no: dashboardRes.data[0]?.room_no || "N/A",
-          });
-          setMaintenanceForm({ ...maintenanceForm, room_no: dashboardRes.data[0]?.room_no || "" });
-        } catch (blockError) {
-          console.error("Error fetching block data:", blockError.response?.data || blockError.message);
-          setUserDetails({
-            name: dashboardRes.data[0]?.name || "Inconnu",
-            block_no: "N/A",
-            block_name: "Inconnu",
-            room_no: dashboardRes.data[0]?.room_no || "N/A",
-          });
-        }
-        setUserName(dashboardRes.data[0]?.name || "Utilisateur");
       }
-  
+
       setForBox(boxData);
       setRecentActivities(activitiesRes.data);
       setFilteredActivities(activitiesRes.data);
       setNotifications(notificationsRes.data);
-      setComplaintSummary(activitiesRes.data.slice(0, 2));
+      setComplaintSummary(complaintsRes.data.slice(0, 2));
       setPaymentStatus(paymentRes.data);
+      setForceUpdate(prev => prev + 1);
     } catch (error) {
-      console.error("Erreur lors de la récupération des données du tableau de bord:", error.response?.data || error.message);
+      console.error("Dashboard data fetch error:", {
+        message: error.message,
+        status: error.response?.status,
+        data: error.response?.data,
+      });
       if (error.response?.status === 404) {
         if (error.response?.data?.error === "Owner not found") {
           setError("Propriétaire non trouvé. Veuillez vérifier votre compte.");
-        } else if (error.response?.data?.error && error.response.data.error.includes("Employee not found")) {
+        } else if (error.response?.data?.error?.includes("Employee not found")) {
           setError("Employé non trouvé. Veuillez vérifier votre compte.");
         } else {
           setError("Impossible de charger les données du tableau de bord. L'endpoint est introuvable.");
@@ -747,7 +747,7 @@ function Dashboard({ navItems, basePath }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   const handleFormSubmit = async (e) => {
     e.preventDefault();
@@ -870,12 +870,13 @@ function Dashboard({ navItems, basePath }) {
       navigate("/login");
       return;
     }
-
     const fetchData = async () => {
       if (!isMounted) return;
       await getBoxInfo();
       await fetchWeather();
-      await fetchSystemStatusAndQuickStats();
+      if (whom.userType === "admin") {
+        await fetchSystemStatusAndQuickStats();
+      }
     };
 
     fetchData();
@@ -883,7 +884,7 @@ function Dashboard({ navItems, basePath }) {
     return () => {
       isMounted = false;
     };
-  }, [navigate, fetchSystemStatusAndQuickStats]);
+  }, [navigate, fetchSystemStatusAndQuickStats, getBoxInfo, fetchWeather]);
 
   useEffect(() => {
     if (chartRef.current) {
@@ -1138,7 +1139,7 @@ function Dashboard({ navItems, basePath }) {
         </div>
       ) : (
         <div className="flex-1 flex flex-col p-6 md:p-8 gap-8">
-          {/* Top Row: Profile and Weather (Common for All User Types) */}
+          {/* Top Row: Profile and Weather */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -1288,7 +1289,7 @@ function Dashboard({ navItems, basePath }) {
                       Payer l'entretien
                     </button>
                     <Link
-                      to="/tenant/filecomplaint"
+                      to="/tenant/raisingcomplaints"
                       className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-yellow-500 text-white hover:bg-yellow-600 dark:bg-yellow-600 dark:hover:bg-yellow-700"
                       aria-label="Déposer une plainte"
                     >
@@ -1296,7 +1297,7 @@ function Dashboard({ navItems, basePath }) {
                       Déposer une plainte
                     </Link>
                     <Link
-                      to="/tenant/bookslot"
+                      to="/tenant/allotedparkingslot"
                       className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
                       aria-label="Réserver un emplacement de parking"
                     >
@@ -1343,930 +1344,953 @@ function Dashboard({ navItems, basePath }) {
             </div>
           )}
 
-          {userType === "owner" && (
-            <div className="flex-1 flex flex-col gap-8">
-              {/* Middle Row: Dashboard Cards, Actions, and Tenant Overview */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                {/* Dashboard Cards (1x2 Grid) */}
-                <div className="grid grid-cols-1 gap-8">
-                  {forBox.map((ele, index) => (
-                    <motion.div
-                      key={index + 1}
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.5, delay: index * 0.1 }}
-                      className={`p-6 rounded-xl shadow-lg transform hover:-translate-y-1 transition-all duration-300 flex items-center gap-4 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 border-l-4 border-green-500 w-full border border-gray-200 dark:border-gray-700`}
-                    >
-                      <div className="text-3xl text-blue-500">{ele.icon}</div>
-                      <div>
-                        <h1 className="font-bold text-2xl">{ele.value}</h1>
-                        <p className="font-semibold text-sm uppercase text-gray-500 dark:text-gray-400 mt-2 tracking-wide">
-                          {ele.label}
-                        </p>
-                      </div>
-                    </motion.div>
-                  ))}
-                </div>
-
-                {/* Actions Rapides and Tenant Overview (Stacked) */}
-                <div className="flex flex-col gap-8">
-                  <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.5 }}
-                    className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
-                  >
-                    <h2 className="text-xl font-bold mb-4 text-center">Actions Rapides</h2>
-                    <div className="flex flex-col gap-3">
-                      <Link
-                        to="/owner/createtenant"
-                        className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
-                        aria-label="Créer un locataire"
-                      >
-                        <FaPlus />
-                        Créer un locataire
-                      </Link>
-                      <Link
-                        to="/owner/tenantdetails"
-                        className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
-                        aria-label="Voir les locataires"
-                      >
-                        <FaUsers />
-                        Voir les locataires
-                      </Link>
-                    </div>
-                  </motion.div>
-
-                  <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.5 }}
-                    className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
-                  >
-                    <h2 className="text-xl font-bold mb-4 text-center">Aperçu des Locataires</h2>
-                    {tenantOverview.totalTenants > 0 ? (
-                      <div className="space-y-3">
-                        <p className="text-base flex items-center gap-2">
-                          <FaUsers className="text-blue-500 text-2xl" />
-                          <span className="font-semibold">Total Locataires:</span> {tenantOverview.totalTenants}
-                        </p>
-                        <p className="text-base flex items-center gap-2">
-                          <FaFileAlt className="text-green-500 text-2xl" />
-                          <span className="font-semibold">Baux Actifs:</span> {tenantOverview.activeLeases}
-                        </p>
-                      </div>
-                    ) : (
-                      renderSkeletonLoader()
-                    )}
-                  </motion.div>
-                </div>
-              </div>
-
-              {/* Bottom Row: Recent Activities, Maintenance Requests, Complaint Summary */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                {/* Recent Activities */}
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.5 }}
-                  className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
-                >
-                  <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-xl font-bold">Activités Récentes</h2>
-                    <div className="flex items-center gap-2">
-                      <div className="relative group">
-                        <input
-                          type="date"
-                          value={activityFilterDate}
-                          onChange={(e) => {
-                            setActivityFilterDate(e.target.value);
-                            handleActivityFilter(e.target.value);
-                          }}
-                          className="p-2 border rounded text-sm focus:ring-2 focus:ring-blue-500 transition-all duration-300 bg-white text-gray-800 border-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"
-                          aria-label="Filtrer les activités par date"
-                        />
-                        <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-10 left-1/2 transform -translate-x-1/2">Filtrer par date</span>
-                      </div>
-                      <button
-                        onClick={() => {
-                          setActivityFilterDate("");
-                          handleActivityFilter("");
-                        }}
-                        className="p-2 rounded-full transition-all duration-300 bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 relative group"
-                        aria-label="Effacer le filtre"
-                      >
-                        <FaFilter size={16} />
-                        <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-10 left-1/2 transform -translate-x-1/2">Effacer le filtre</span>
-                      </button>
-                    </div>
-                  </div>
-                  {filteredActivities.length === 0 ? (
-                    renderEmptyPlaceholder("Aucune activité récente.")
-                  ) : (
-                    <>
-                      <ul className="space-y-2">
-                        {(showAllActivities ? filteredActivities : filteredActivities.slice(0, 4)).map((activity, index) => (
-                          <li key={index} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
-                            <span>{activity.action}</span>
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs text-gray-400 dark:text-gray-500">
-                                {new Date(activity.date).toLocaleString()}
-                              </span>
-                              <button
-                                onClick={() => markActivityAsRead(index)}
-                                className="text-green-500 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300 transition-all duration-300 text-sm relative group"
-                                aria-label="Marquer comme lu"
-                              >
-                                <FaCheck />
-                                <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Marquer comme lu</span>
-                              </button>
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                      {filteredActivities.length > 4 && (
-                        <button
-                          onClick={() => setShowAllActivities(!showAllActivities)}
-                          className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 text-sm mt-3"
-                          aria-label={showAllActivities ? "Afficher moins d'activités" : "Afficher plus d'activités"}
-                        >
-                          {showAllActivities ? "Afficher moins" : "Afficher plus"}
-                        </button>
-                      )}
-                    </>
-                  )}
-                </motion.div>
-
-                {/* Maintenance Requests */}
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.5 }}
-                  className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
-                >
-                  <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-xl font-bold">Demandes de Maintenance Récentes</h2>
-                    <Link
-                      to={`/${userType}/maintenancerequests`}
-                      className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 text-sm flex items-center gap-1 relative group"
-                      aria-label="Voir toutes les demandes de maintenance"
-                    >
-                      <FaWrench />
-                      Voir toutes les demandes
-                      <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Voir toutes les demandes</span>
-                    </Link>
-                  </div>
-                  {maintenanceRequests.length === 0 ? (
-                    renderEmptyPlaceholder("Aucune demande de maintenance récente.")
-                  ) : (
-                    <ul className="space-y-2">
-                      {maintenanceRequests.map((request) => (
-                        <li key={request.id} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
-                          <span>Chambre {request.room_no}: {request.description}</span>
-                          <span
-                            className={`text-xs font-semibold ${
-                              request.status?.toLowerCase() === "pending"
-                                ? "text-red-500"
-                                : request.status?.toLowerCase() === "in_progress"
-                                ? "text-blue-500"
-                                : request.status?.toLowerCase() === "resolved"
-                                ? "text-green-500"
-                                : "text-gray-400 dark:text-gray-500"
-                            }`}
-                          >
-                            {request.status?.toLowerCase() === "pending"
-                              ? "En attente"
-                              : request.status?.toLowerCase() === "in_progress"
-                              ? "En cours"
-                              : request.status?.toLowerCase() === "resolved"
-                              ? "Résolu"
-                              : "Inconnu"}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </motion.div>
-
-                {/* Complaint Summary */}
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.5 }}
-                  className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
-                >
-                  <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-xl font-bold">Résumé des Plaintes Récentes</h2>
-                    <div className="flex items-center gap-2">
-                      <Link
-                        to={`/${userType}/complaint`}
-                        className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 text-sm flex items-center gap-1 relative group"
-                        aria-label="Voir toutes les plaintes"
-                      >
-                        Voir toutes les plaintes
-                        <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Voir toutes les plaintes</span>
-                      </Link>
-                      {complaintSummary.some(complaint => !complaint.resolved) && (
-                        <button
-                          onClick={resolveAllComplaints}
-                          className="text-green-500 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300 transition-all duration-300 text-sm flex items-center gap-1 relative group"
-                          aria-label="Résoudre toutes les plaintes"
-                        >
-                          Résoudre tout
-                          <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Résoudre toutes les plaintes</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  {complaintSummary.length === 0 ? (
-                    renderEmptyPlaceholder("Aucune plainte récente.")
-                  ) : (
-                    <>
-                      <ul className="space-y-2">
-                        {complaintSummary.map((complaint) => (
-                          <li key={complaint.room_no} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
-                            <span>Chambre {complaint.room_no}: {complaint.complaints}</span>
-                            <div className="flex items-center gap-2">
-                              <span
-                                className={`text-xs font-semibold ${complaint.resolved ? "text-green-500" : "text-red-500"}`}
-                              >
-                                {complaint.resolved ? "Résolu" : "Non résolu"}
-                              </span>
-                              {!complaint.resolved && userType === "owner" && (
-                                <button
-                                  onClick={async () => {
-                                    try {
-                                      await axios.post(`${process.env.REACT_APP_SERVER}/deletecomplaint`, { room_no: complaint.room_no });
-                                      toast.success("Plainte résolue avec succès");
-                                      getBoxInfo();
-                                    } catch (error) {
-                                      toast.error("Erreur lors de la résolution de la plainte : " + (error.response?.data?.error || error.message));
-                                    }
-                                  }}
-                                  className="text-green-500 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300 transition-all duration-300 text-sm relative group"
-                                  aria-label="Résoudre la plainte"
-                                >
-                                  Résoudre
-                                  <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Résoudre</span>
-                                </button>
-                              )}
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                      <div className="mt-4">
-                        <canvas id="complaintsChart" height="150"></canvas>
-                      </div>
-                    </>
-                  )}
-                </motion.div>
-              </div>
-            </div>
-          )}
-
-          {userType === "employee" && (
-            <div className="flex-1 flex flex-col gap-8">
-              {/* Middle Row: Dashboard Cards, Actions, and Pending Tasks */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                {/* Dashboard Cards (1x2 Grid) */}
-                <div className="lg:col-span-1 grid grid-cols-1 gap-8">
-                  {forBox.map((ele, index) => (
-                    <motion.div
-                      key={index + 1}
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.5, delay: index * 0.1 }}
-                      className={`p-6 rounded-xl shadow-lg transform hover:-translate-y-1 transition-all duration-300 flex items-center gap-4 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 border-l-4 border-yellow-500 w-full border border-gray-200 dark:border-gray-700`}
-                    >
-                      <div className="text-3xl text-blue-500">{ele.icon}</div>
-                      <div>
-                        <h1 className="font-bold text-2xl">{ele.value}</h1>
-                        <p className="font-semibold text-sm uppercase text-gray-500 dark:text-gray-400 mt-2 tracking-wide">
-                          {ele.label}
-                        </p>
-                      </div>
-                    </motion.div>
-                  ))}
-                </div>
-
-                {/* Actions Rapides and Pending Tasks (Stacked) */}
-                <div className="lg:col-span-2 flex flex-col gap-8">
-                  <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.5 }}
-                    className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
-                  >
-                    <h2 className="text-xl font-bold mb-4 text-center">Actions Rapides</h2>
-                    <div className="flex flex-col gap-3">
-                      <Link
-                        to="/employee/viewcomplaints"
-                        className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
-                        aria-label="Voir les plaintes"
-                      >
-                        <FaFileAlt />
-                        Voir les plaintes
-                      </Link>
-                    </div>
-                  </motion.div>
-
-                  <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.5 }}
-                    className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700 flex-1"
-                  >
-                    <h2 className="text-xl font-bold mb-4 text-center">Tâches en Attente</h2>
-                    {pendingTasks.length === 0 ? (
-                      renderEmptyPlaceholder("Aucune tâche en attente.")
-                    ) : (
-                      <ul className="space-y-2">
-                        {pendingTasks.slice(0, 3).map((task, index) => (
-                          <li key={index} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
-                            <span>{task.description}</span>
-                            <span
-                              className={`text-xs font-semibold ${
-                                task.status?.toLowerCase() === "pending"
-                                  ? "text-red-500"
-                                  : task.status?.toLowerCase() === "in_progress"
-                                  ? "text-blue-500"
-                                  : "text-green-500"
-                              }`}
-                            >
-                              {task.status?.toLowerCase() === "pending"
-                                ? "En attente"
-                                : task.status?.toLowerCase() === "in_progress"
-                                ? "En cours"
-                                : "Résolu"}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </motion.div>
-                </div>
-              </div>
-
-              {/* Bottom Row: Email Writer and Maintenance Requests */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                {/* Email Writer */}
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.5 }}
-                  className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
-                >
-                  <h2 className="text-xl font-bold mb-4 text-center flex items-center justify-center gap-2">
-                    <FaEnvelope className="text-blue-500 text-2xl" />
-                    Envoyer un Message
-                  </h2>
-                  <form onSubmit={handleEmailSubmit} className="space-y-4">
-                    <div className="flex gap-4">
-                      <div className="flex-1">
-                        <label className="block text-sm font-medium mb-1">Type de destinataire</label>
-                        <select
-                          value={emailForm.recipientType}
-                          onChange={(e) => {
-                            setEmailForm({ ...emailForm, recipientType: e.target.value, recipientId: "" });
-                          }}
-                          className={`w-full p-2 border rounded text-sm transition-all duration-300 focus:ring-2 focus:ring-blue-500 ${
-                            darkMode ? "bg-gray-700 text-gray-200 border-gray-600" : "bg-white text-gray-800 border-gray-300"
-                          }`}
-                          required
-                        >
-                          <option value="">Sélectionnez un type</option>
-                          <option value="admin">Administrateur</option>
-                          <option value="owner">Propriétaire</option>
-                        </select>
-                      </div>
-                      {emailForm.recipientType && (
-                        <div className="flex-1">
-                          <label className="block text-sm font-medium mb-1">Destinataire</label>
-                          <select
-                            value={emailForm.recipientId}
-                            onChange={(e) => setEmailForm({ ...emailForm, recipientId: e.target.value })}
-                            className={`w-full p-2 border rounded text-sm transition-all duration-300 focus:ring-2 focus:ring-blue-500 ${
-                              darkMode ? "bg-gray-700 text-gray-200 border-gray-600" : "bg-white text-gray-800 border-gray-300"
-                            }`}
-                            required
-                          >
-                            <option value="">Sélectionnez un destinataire</option>
-                            {users
-                              .filter((u) => u.type === emailForm.recipientType)
-                              .map((u) => (
-                                <option key={`${u.type}-${u.id}`} value={u.id}>
-                                  {u.name} ({u.type === "admin" ? "Administrateur" : "Propriétaire"})
-                                </option>
-                              ))}
-                          </select>
-                        </div>
-                      )}
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium mb-1">Sujet</label>
-                      <input
-                        type="text"
-                        value={emailForm.subject}
-                        onChange={(e) => setEmailForm({ ...emailForm, subject: e.target.value })}
-                        className={`w-full p-2 border rounded text-sm transition-all duration-300 focus:ring-2 focus:ring-blue-500 ${
-                          darkMode ? "bg-gray-700 text-gray-200 border-gray-600" : "bg-white text-gray-800 border-gray-300"
-                        }`}
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium mb-1">Message</label>
-                      <textarea
-                        value={emailForm.message}
-                        onChange={(e) => setEmailForm({ ...emailForm, message: e.target.value })}
-                        className={`w-full p-2 border rounded text-sm transition-all duration-300 h-24 resize-none focus:ring-2 focus:ring-blue-500 ${
-                          darkMode ? "bg-gray-700 text-gray-200 border-gray-600" : "bg-white text-gray-800 border-gray-300"
-                        }`}
-                        required
-                      />
-                    </div>
-                    <button
-                      type="submit"
-                      disabled={emailSending}
-                      className={`w-full p-3 rounded-lg text-base transition-all duration-300 flex items-center justify-center gap-2 ${
-                        emailSending
-                          ? "bg-gray-500 cursor-not-allowed"
-                          : darkMode
-                          ? "bg-blue-600 text-white hover:bg-blue-700"
-                          : "bg-blue-500 text-white hover:bg-blue-600"
-                      }`}
-                    >
-                      <FaPaperPlane />
-                      {emailSending ? "Envoi en cours..." : "Envoyer le message"}
-                    </button>
-                  </form>
-                </motion.div>
-
-                {/* Maintenance Requests */}
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.5 }}
-                  className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
-                >
-                  <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-xl font-bold">Demandes de Maintenance Récentes</h2>
-                    <Link
-                      to={`/${userType}/maintenancerequests`}
-                      className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 text-sm flex items-center gap-1 relative group"
-                      aria-label="Voir toutes les demandes de maintenance"
-                    >
-                      <FaWrench />
-                      Voir toutes les demandes
-                      <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">
-                        Voir toutes les demandes
-                      </span>
-                    </Link>
-                  </div>
-                  {maintenanceRequests.length === 0 ? (
-                    renderEmptyPlaceholder("Aucune demande de maintenance récente.")
-                  ) : (
-                    <ul className="space-y-2">
-                      {maintenanceRequests.map((request) => (
-                        <li key={request.id} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
-                          <span>Chambre {request.room_no}: {request.description}</span>
-                          <span
-                            className={`text-xs font-semibold ${
-                              request.status?.toLowerCase() === "pending"
-                                ? "text-red-500"
-                                : request.status?.toLowerCase() === "in_progress"
-                                ? "text-blue-500"
-                                : request.status?.toLowerCase() === "resolved"
-                                ? "text-green-500"
-                                : "text-gray-400 dark:text-gray-500"
-                            }`}
-                          >
-                            {request.status?.toLowerCase() === "pending"
-                              ? "En attente"
-                              : request.status?.toLowerCase() === "in_progress"
-                              ? "En cours"
-                              : request.status?.toLowerCase() === "resolved"
-                              ? "Résolu"
-                              : "Inconnu"}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </motion.div>
-              </div>
-            </div>
-          )}
-
-          {userType === "admin" && (
-            <div className="flex-1 flex flex-col gap-8">
-              {/* Middle Row: Dashboard Cards, Actions/System Stats */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                {/* Dashboard Cards and User Distribution Chart */}
-                <div className="lg:col-span-2 flex flex-col gap-8">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
-                    {forBox.map((ele, index) => (
-                      <motion.div
-                        key={index + 1}
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.5, delay: index * 0.1 }}
-                        className={`p-6 rounded-xl shadow-lg transform hover:-translate-y-1 transition-all duration-300 flex items-center gap-4 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 border-l-4 border-blue-500 w-full border border-gray-200 dark:border-gray-700`}
-                      >
-                        <div className="text-3xl text-blue-500">{ele.icon}</div>
-                        <div>
-                          <h1 className="font-bold text-2xl">{ele.value}</h1>
-                          <p className="font-semibold text-sm uppercase text-gray-500 dark:text-gray-400 mt-2 tracking-wide">
-                            {ele.label}
-                          </p>
-                        </div>
-                      </motion.div>
-                    ))}
-                  </div>
-
-                  <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.5 }}
-                    className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
-                  >
-                    <h2 className="text-xl font-bold mb-4 text-center">Répartition des Utilisateurs</h2>
-                    <div className="h-64">
-                      <canvas ref={canvasRef} height="200"></canvas>
-                    </div>
-                    {/* Color Index for the Pie Chart */}
-                    <div className="mt-4">
-                      <h3 className="text-sm font-semibold mb-2">Légende :</h3>
-                      <ul className="text-sm space-y-1">
-                        <li className="flex items-center">
-                          <span className="inline-block w-4 h-4 mr-2 rounded-full" style={{ backgroundColor: "rgba(34, 197, 94, 0.7)" }}></span>
-                          Propriétaires
-                        </li>
-                        <li className="flex items-center">
-                          <span className="inline-block w-4 h-4 mr-2 rounded-full" style={{ backgroundColor: "rgba(54, 162, 235, 0.7)" }}></span>
-                          Locataires
-                        </li>
-                        <li className="flex items-center">
-                          <span className="inline-block w-4 h-4 mr-2 rounded-full" style={{ backgroundColor: "rgba(249, 115, 22, 0.7)" }}></span>
-                          Employés
-                        </li>
-                      </ul>
-                    </div>
-                  </motion.div>
-                </div>
-
-                {/* Actions Rapides, État du Système, Aperçu des Statistiques Rapides */}
-                <div className="lg:col-span-1 flex flex-col gap-8">
-                  <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.5 }}
-                    className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
-                  >
-                    <div className="flex justify-between items-center mb-4">
-                      <h2 className="text-xl font-bold">Actions Rapides</h2>
-                      <button
-                        onClick={refreshAdminData}
-                        className="p-2 rounded-full transition-all duration-300 bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 relative group"
-                        aria-label="Actualiser les données"
-                      >
-                        <FaSyncAlt className={statsLoading ? "animate-spin" : ""} size={16} />
-                        <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-10 left-1/2 transform -translate-x-1/2">Actualiser</span>
-                      </button>
-                    </div>
-                    <div className="flex flex-col gap-3">
-                      <Link
-                        to="/admin/tenantdetails"
-                        className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
-                        aria-label="Voir les locataires"
-                      >
-                        <FaUsers />
-                        Voir les locataires
-                      </Link>
-                      <Link
-                        to="/admin/createowner"
-                        className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
-                        aria-label="Créer un propriétaire"
-                      >
-                        <FaPlus />
-                        Créer un propriétaire
-                      </Link>
-                      <button
-                        onClick={exportUserData}
-                        className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-green-500 text-white hover:bg-green-600 dark:bg-green-600 dark:hover:bg-green-700"
-                        aria-label="Exporter les données"
-                      >
-                        <FaDownload />
-                        Exporter les données
-                      </button>
-                    </div>
-                  </motion.div>
-
-                  <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.5 }}
-                    className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
-                  >
-                    <h2 className="text-xl font-bold mb-4 text-center">État du Système</h2>
-                    {statsLoading ? (
-                      renderSkeletonLoader()
-                    ) : statsError ? (
-                      <div className="text-sm text-red-500">
-                        <p>{statsError}</p>
-                        <button
-                          onClick={fetchSystemStatusAndQuickStats}
-                          className="mt-2 text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300"
-                          aria-label="Réessayer de charger les statistiques"
-                        >
-                          Réessayer
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        <div className="text-base flex items-center gap-2">
-                          <FaServer className="text-blue-500 text-2xl" />
-                          <span className="font-semibold">Temps de disponibilité:</span>
-                          <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-3">
-                            <div
-                              className="bg-blue-500 h-3 rounded-full transition-all duration-500"
-                              style={{ width: systemStatus.uptime }}
-                            ></div>
-                          </div>
-                          <span>{systemStatus.uptime}</span>
-                        </div>
-                        <p className="text-base flex items-center gap-2">
-                          <FaUsers className="text-blue-500 text-2xl" />
-                          <span className="font-semibold">Utilisateurs actifs:</span> {systemStatus.activeUsers}
-                        </p>
-                        <p className="text-base flex items-center gap-2">
-                          <FaExclamationCircle className={systemStatus.alerts > 0 ? "text-red-500 text-2xl" : "text-green-500 text-2xl"} />
-                          <span className="font-semibold">Alertes récentes:</span>
-                          <span className={systemStatus.alerts > 0 ? "text-red-500" : "text-green-500"}>
-                            {systemStatus.alerts}
-                          </span>
-                        </p>
-                      </div>
-                    )}
-                  </motion.div>
-
-                  <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.5 }}
-                    className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
-                  >
-                    <h2 className="text-xl font-bold mb-4 text-center">Aperçu des Statistiques Rapides</h2>
-                    {statsLoading ? (
-                      renderSkeletonLoader()
-                    ) : statsError ? (
-                      <div className="text-sm text-red-500">
-                        <p>{statsError}</p>
-                        <button
-                          onClick={fetchSystemStatusAndQuickStats}
-                          className="mt-2 text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300"
-                          aria-label="Réessayer de charger les statistiques"
-                        >
-                          Réessayer
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        <p className="text-base flex items-center gap-2">
-                          <FaUsers className="text-blue-500 text-2xl" />
-                          <span className="font-semibold">Connexions aujourd'hui:</span> {quickStats.totalLoginsToday}
-                        </p>
-                        <p className="text-base flex items-center gap-2">
-                          <FaExclamationTriangle className="text-yellow-500 text-2xl" />
-                          <span className="font-semibold">Plaintes déposées:</span> {quickStats.totalComplaintsFiled}
-                        </p>
-                        <p className="text-base flex items-center gap-2">
-                          <FaExclamationCircle className="text-red-500 text-2xl" />
-                          <span className="font-semibold">Demandes en attente:</span> {quickStats.pendingRequests}
-                        </p>
-                      </div>
-                    )}
-                  </motion.div>
-                </div>
-              </div>
-
-              {/* Bottom Row: Recent Activities, Quick Links, Maintenance Requests */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                {/* Recent Activities */}
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.5 }}
-                  className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
-                >
-                  <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-xl font-bold">Activités Récentes</h2>
-                    <div className="flex items-center gap-2">
-                      <div className="relative group">
-                        <input
-                          type="date"
-                          value={activityFilterDate}
-                          onChange={(e) => {
-                            setActivityFilterDate(e.target.value);
-                            handleActivityFilter(e.target.value);
-                          }}
-                          className="p-2 border rounded text-sm focus:ring-2 focus:ring-blue-500 transition-all duration-300 bg-white text-gray-800 border-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"
-                          aria-label="Filtrer les activités par date"
-                        />
-                        <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-10 left-1/2 transform -translate-x-1/2">Filtrer par date</span>
-                      </div>
-                      <button
-                        onClick={() => {
-                          setActivityFilterDate("");
-                          handleActivityFilter("");
-                        }}
-                        className="p-2 rounded-full transition-all duration-300 bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 relative group"
-                        aria-label="Effacer le filtre"
-                      >
-                        <FaFilter size={16} />
-                        <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-10 left-1/2 transform -translate-x-1/2">Effacer le filtre</span>
-                      </button>
-                    </div>
-                  </div>
-                  {filteredActivities.length === 0 ? (
-                    renderEmptyPlaceholder("Aucune activité récente.")
-                  ) : (
-                    <>
-                      <ul className="space-y-2">
-                        {(showAllActivities ? filteredActivities : filteredActivities.slice(0, 4)).map((activity, index) => (
-                          <li key={index} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
-                            <span>{activity.action}</span>
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs text-gray-400 dark:text-gray-500">
-                                {new Date(activity.date).toLocaleString()}
-                              </span>
-                              <button
-                                onClick={() => markActivityAsRead(index)}
-                                className="text-green-500 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300 transition-all duration-300 text-sm relative group"
-                                aria-label="Marquer comme lu"
-                              >
-                                <FaCheck />
-                                <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Marquer comme lu</span>
-                              </button>
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                      {filteredActivities.length > 4 && (
-                        <button
-                          onClick={() => setShowAllActivities(!showAllActivities)}
-                          className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 text-sm mt-3"
-                          aria-label={showAllActivities ? "Afficher moins d'activités" : "Afficher plus d'activités"}
-                        >
-                          {showAllActivities ? "Afficher moins" : "Afficher plus"}
-                        </button>
-                      )}
-                    </>
-                  )}
-                </motion.div>
-
-                {/* Quick Links */}
-                <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5 }}
-                className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
-              >
-                <h2 className="text-xl font-bold mb-4 text-center">Liens Rapides</h2>
-                <div className="flex flex-col gap-3">
-                  {quickLinks.map((link, index) => (
-                    <Link
-                      key={index}
-                      to={link.url}
-                      className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base w-full bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
-                      aria-label={link.name}
-                    >
-                      {link.icon}
-                      {link.name}
-                    </Link>
-                  ))}
-                </div>
-              </motion.div>
-
-                {/* Maintenance Requests */}
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.5 }}
-                  className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
-                >
-                  <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-xl font-bold">Demandes de Maintenance Récentes</h2>
-                    <Link
-                      to={`/${userType}/maintenancerequests`}
-                      className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 text-sm flex items-center gap-1 relative group"
-                      aria-label="Voir toutes les demandes de maintenance"
-                    >
-                      <FaWrench />
-                      Voir toutes les demandes
-                      <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Voir toutes les demandes</span>
-                    </Link>
-                  </div>
-                  {maintenanceRequests.length === 0 ? (
-                    renderEmptyPlaceholder("Aucune demande de maintenance récente.")
-                  ) : (
-                    <ul className="space-y-2">
-                      {maintenanceRequests.map((request) => (
-                        <li key={request.id} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
-                          <span>Chambre {request.room_no}: {request.description}</span>
-                          <span
-                            className={`text-xs font-semibold ${
-                              request.status?.toLowerCase() === "pending"
-                                ? "text-red-500"
-                                : request.status?.toLowerCase() === "in_progress"
-                                ? "text-blue-500"
-                                : request.status?.toLowerCase() === "resolved"
-                                ? "text-green-500"
-                                : "text-gray-400 dark:text-gray-500"
-                            }`}
-                          >
-                            {request.status?.toLowerCase() === "pending"
-                              ? "En attente"
-                              : request.status?.toLowerCase() === "in_progress"
-                              ? "En cours"
-                              : request.status?.toLowerCase() === "resolved"
-                              ? "Résolu"
-                              : "Inconnu"}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </motion.div>
-              </div>
-            </div>
-          )}
-
-          {/* Footer Row: Apartment Rules (Common for All User Types) */}
+{userType === "owner" && (
+  <div className="flex-1 flex flex-col gap-8">
+    {/* Middle Row: Dashboard Cards, Actions, and Tenant Overview */}
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      {/* Dashboard Cards (1x2 Grid) */}
+      <div className="grid grid-cols-1 gap-8">
+        {forBox.map((ele, index) => (
           <motion.div
+            key={index + 1}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5 }}
-            className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl max-h-96 overflow-y-auto bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+            transition={{ duration: 0.5, delay: index * 0.1 }}
+            className={`p-6 rounded-xl shadow-lg transform hover:-translate-y-1 transition-all duration-300 flex items-center gap-4 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 border-l-4 border-green-500 w-full border border-gray-200 dark:border-gray-700`}
           >
-            <div className="flex justify-between items-center mb-4">
-              <h1 className="text-xl font-bold">Règles et Régulations de l'Appartement</h1>
-              <button
-                onClick={toggleRules}
-                className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 relative group"
-                aria-label={showRules ? "Masquer les règles" : "Afficher les règles"}
-              >
-                {showRules ? <FaChevronUp size={16} /> : <FaChevronDown size={16} />}
-                <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">
-                  {showRules ? "Masquer" : "Afficher"}
-                </span>
-              </button>
+            <div className="text-3xl text-blue-500">{ele.icon}</div>
+            <div>
+              <h1 className="font-bold text-2xl">{ele.value}</h1>
+              <p className="font-semibold text-sm uppercase text-gray-500 dark:text-gray-400 mt-2 tracking-wide">
+                {ele.label}
+              </p>
             </div>
-            <AnimatePresence>
-              {showRules && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  transition={{ duration: 0.3 }}
-                  className="text-gray-600 dark:text-gray-400 space-y-4 text-base"
-                >
-                  {rules.map((section, sectionIndex) => (
-                    <div key={sectionIndex} className="space-y-2">
-                      <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-100">
-                        {section.section}
-                      </h2>
-                      {section.content && (
-                        <p className="text-base">{section.content}</p>
-                      )}
-                      {section.rules && (
-                        <ul className="space-y-2">
-                          {section.rules.map((rule) => (
-                            <li key={rule.id}>
-                              <span className="font-medium text-gray-800 dark:text-gray-100">
-                                {rule.id} {rule.title}
-                              </span>
-                              <ul className="list-disc pl-6 mt-1 space-y-1">
-                                {rule.subrules.map((subrule) => (
-                                  <li key={subrule.id} className="text-base">
-                                    <span className="font-medium">{subrule.id}</span> {subrule.text}
-                                  </li>
-                                ))}
-                              </ul>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  ))}
-                </motion.div>
-              )}
-            </AnimatePresence>
           </motion.div>
-        </div>
-      )}
-    </div>
-  );
-}
+        ))}
+      </div>
 
-export default Dashboard;
+      {/* Actions Rapides and Tenant Overview (Stacked) */}
+      <div className="flex flex-col gap-8">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+        >
+          <h2 className="text-xl font-bold mb-4 text-center">Actions Rapides</h2>
+          <div className="flex flex-col gap-3">
+            <Link
+              to="/owner/createtenant"
+              className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+              aria-label="Créer un locataire"
+            >
+              <FaPlus />
+              Créer un locataire
+            </Link>
+            <Link
+              to="/owner/tenantdetails"
+              className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+              aria-label="Voir les locataires"
+            >
+              <FaUsers />
+              Voir les locataires
+            </Link>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+        >
+          <h2 className="text-xl font-bold mb-4 text-center">Aperçu des Locataires</h2>
+          {tenantOverview.totalTenants === 0 ? (
+            renderEmptyPlaceholder("Aucun locataire associé.")
+          ) : (
+            <div className="space-y-3">
+              <p className="text-base flex items-center gap-2">
+                <FaUsers className="text-blue-500 text-2xl" />
+                <span className="font-semibold">Total Locataires:</span> {tenantOverview.totalTenants}
+              </p>
+              <p className="text-base flex items-center gap-2">
+                <FaFileAlt className="text-green-500 text-2xl" />
+                <span className="font-semibold">Baux Actifs:</span> {tenantOverview.activeLeases}
+              </p>
+            </div>
+          )}
+        </motion.div>
+      </div>
+
+      {/* Updated Quick Links Card */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5 }}
+        className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+      >
+        <h2 className="text-xl font-bold mb-4 text-center">Liens Rapides</h2>
+        <div className="flex flex-col gap-3">
+          {quickLinks
+            .filter(link => !link.userType || link.userType === "owner") // Show links that are either for "owner" or have no userType restriction
+            .filter(link => link.name !== "Portail de gestion") // Exclude "Portail de gestion"
+            .map((link, index) => (
+              <Link
+                key={index}
+                to={link.url}
+                className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base w-full bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+                aria-label={link.name}
+              >
+                {link.icon}
+                {link.name}
+              </Link>
+            ))}
+        </div>
+      </motion.div>
+    </div>
+
+    {/* Bottom Row: Recent Activities, Maintenance Requests, Complaint Summary */}
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      {/* Recent Activities */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5 }}
+        className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+      >
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-bold">Activités Récentes</h2>
+          <div className="flex items-center gap-2">
+            <div className="relative group">
+              <input
+                type="date"
+                value={activityFilterDate}
+                onChange={(e) => {
+                  setActivityFilterDate(e.target.value);
+                  handleActivityFilter(e.target.value);
+                }}
+                className="p-2 border rounded text-sm focus:ring-2 focus:ring-blue-500 transition-all duration-300 bg-white text-gray-800 border-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"
+                aria-label="Filtrer les activités par date"
+              />
+              <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-10 left-1/2 transform -translate-x-1/2">Filtrer par date</span>
+            </div>
+            <button
+              onClick={() => {
+                setActivityFilterDate("");
+                handleActivityFilter("");
+              }}
+              className="p-2 rounded-full transition-all duration-300 bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 relative group"
+              aria-label="Effacer le filtre"
+            >
+              <FaFilter size={16} />
+              <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-10 left-1/2 transform -translate-x-1/2">Effacer le filtre</span>
+            </button>
+          </div>
+        </div>
+        {filteredActivities.length === 0 ? (
+          renderEmptyPlaceholder("Aucune activité récente.")
+        ) : (
+          <>
+            <ul className="space-y-2">
+              {(showAllActivities ? filteredActivities : filteredActivities.slice(0, 4)).map((activity, index) => (
+                <li key={index} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
+                  <span>{activity.action}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-400 dark:text-gray-500">
+                      {new Date(activity.date).toLocaleString()}
+                    </span>
+                    <button
+                      onClick={() => markActivityAsRead(index)}
+                      className="text-green-500 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300 transition-all duration-300 text-sm relative group"
+                      aria-label="Marquer comme lu"
+                    >
+                      <FaCheck />
+                      <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Marquer comme lu</span>
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            {filteredActivities.length > 4 && (
+              <button
+                onClick={() => setShowAllActivities(!showAllActivities)}
+                className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 text-sm mt-3"
+                aria-label={showAllActivities ? "Afficher moins d'activités" : "Afficher plus d'activités"}
+              >
+                {showAllActivities ? "Afficher moins" : "Afficher plus"}
+              </button>
+            )}
+          </>
+        )}
+      </motion.div>
+
+      {/* Maintenance Requests */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5 }}
+        className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+      >
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-bold">Demandes de Maintenance Récentes</h2>
+          <Link
+            to={`/${userType}/maintenancerequests`}
+            className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 text-sm flex items-center gap-1 relative group"
+            aria-label="Voir toutes les demandes de maintenance"
+          >
+            <FaWrench />
+            Voir toutes les demandes
+            <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Voir toutes les demandes</span>
+          </Link>
+        </div>
+        {maintenanceRequests.length === 0 ? (
+          renderEmptyPlaceholder("Aucune demande de maintenance récente.")
+        ) : (
+          <ul className="space-y-2">
+            {maintenanceRequests.map((request) => (
+              <li key={request.id} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
+                <span>Chambre {request.room_no}: {request.description}</span>
+                <span
+                  className={`text-xs font-semibold ${
+                    request.status?.toLowerCase() === "pending"
+                      ? "text-red-500"
+                      : request.status?.toLowerCase() === "in_progress"
+                      ? "text-blue-500"
+                      : request.status?.toLowerCase() === "resolved"
+                      ? "text-green-500"
+                      : "text-gray-400 dark:text-gray-500"
+                  }`}
+                >
+                  {request.status?.toLowerCase() === "pending"
+                    ? "En attente"
+                    : request.status?.toLowerCase() === "in_progress"
+                    ? "En cours"
+                    : request.status?.toLowerCase() === "resolved"
+                    ? "Résolu"
+                    : "Inconnu"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </motion.div>
+
+      {/* Complaint Summary */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5 }}
+        className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+      >
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-bold">Résumé des Plaintes Récentes</h2>
+          <div className="flex items-center gap-2">
+            <Link
+              to={`/${userType}/complaint`}
+              className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 text-sm flex items-center gap-1 relative group"
+              aria-label="Voir toutes les plaintes"
+            >
+              Voir toutes les plaintes
+              <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Voir toutes les plaintes</span>
+            </Link>
+            {complaintSummary.some(complaint => !complaint.resolved) && (
+              <button
+                onClick={resolveAllComplaints}
+                className="text-green-500 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300 transition-all duration-300 text-sm flex items-center gap-1 relative group"
+                aria-label="Résoudre toutes les plaintes"
+              >
+                Résoudre tout
+                <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Résoudre toutes les plaintes</span>
+              </button>
+            )}
+          </div>
+        </div>
+        {complaintSummary.length === 0 ? (
+          renderEmptyPlaceholder("Aucune plainte récente.")
+        ) : (
+          <>
+            <ul className="space-y-2">
+              {complaintSummary.map((complaint) => (
+                <li key={complaint.room_no} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
+                  <span>Chambre {complaint.room_no}: {complaint.complaints}</span>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`text-xs font-semibold ${complaint.resolved ? "text-green-500" : "text-red-500"}`}
+                    >
+                      {complaint.resolved ? "Résolu" : "Non résolu"}
+                    </span>
+                    {!complaint.resolved && userType === "owner" && (
+                      <button
+                        onClick={async () => {
+                          try {
+                            await axios.post(`${process.env.REACT_APP_SERVER}/deletecomplaint`, { room_no: complaint.room_no });
+                            toast.success("Plainte résolue avec succès");
+                            getBoxInfo();
+                          } catch (error) {
+                            toast.error("Erreur lors de la résolution de la plainte : " + (error.response?.data?.error || error.message));
+                          }
+                        }}
+                        className="text-green-500 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300 transition-all duration-300 text-sm relative group"
+                        aria-label="Résoudre la plainte"
+                      >
+                        Résoudre
+                        <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Résoudre</span>
+                      </button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-4">
+              <canvas id="complaintsChart" height="150"></canvas>
+            </div>
+          </>
+        )}
+      </motion.div>
+    </div>
+  </div>
+)}
+                   
+                             {userType === "employee" && (
+                               <div className="flex-1 flex flex-col gap-8">
+                                 {/* Middle Row: Dashboard Cards, Actions, and Pending Tasks */}
+                                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                                   {/* Dashboard Cards (1x2 Grid) */}
+                                   <div className="lg:col-span-1 grid grid-cols-1 gap-8">
+                                     {forBox.map((ele, index) => (
+                                       <motion.div
+                                         key={index + 1}
+                                         initial={{ opacity: 0, y: 20 }}
+                                         animate={{ opacity: 1, y: 0 }}
+                                         transition={{ duration: 0.5, delay: index * 0.1 }}
+                                         className={`p-6 rounded-xl shadow-lg transform hover:-translate-y-1 transition-all duration-300 flex items-center gap-4 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 border-l-4 border-yellow-500 w-full border border-gray-200 dark:border-gray-700`}
+                                       >
+                                         <div className="text-3xl text-blue-500">{ele.icon}</div>
+                                         <div>
+                                           <h1 className="font-bold text-2xl">{ele.value}</h1>
+                                           <p className="font-semibold text-sm uppercase text-gray-500 dark:text-gray-400 mt-2 tracking-wide">
+                                             {ele.label}
+                                           </p>
+                                         </div>
+                                       </motion.div>
+                                     ))}
+                                   </div>
+                   
+                                   {/* Actions Rapides and Pending Tasks (Stacked) */}
+                                   <div className="lg:col-span-2 flex flex-col gap-8">
+                                     <motion.div
+                                       initial={{ opacity: 0, y: 20 }}
+                                       animate={{ opacity: 1, y: 0 }}
+                                       transition={{ duration: 0.5 }}
+                                       className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                                     >
+                                       <h2 className="text-xl font-bold mb-4 text-center">Actions Rapides</h2>
+                                       <div className="flex flex-col gap-3">
+                                         <Link
+                                           to="/employee/viewcomplaints"
+                                           className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+                                           aria-label="Voir les plaintes"
+                                         >
+                                           <FaFileAlt />
+                                           Voir les plaintes
+                                         </Link>
+                                       </div>
+                                     </motion.div>
+                   
+                                     <motion.div
+                                       initial={{ opacity: 0, y: 20 }}
+                                       animate={{ opacity: 1, y: 0 }}
+                                       transition={{ duration: 0.5 }}
+                                       className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700 flex-1"
+                                     >
+                                       <h2 className="text-xl font-bold mb-4 text-center">Tâches en Attente</h2>
+                                       {pendingTasks.length === 0 ? (
+                                         renderEmptyPlaceholder("Aucune tâche en attente.")
+                                       ) : (
+                                         <ul className="space-y-2">
+                                           {pendingTasks.slice(0, 3).map((task, index) => (
+                                             <li key={index} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
+                                               <span>{task.description}</span>
+                                               <span
+                                                 className={`text-xs font-semibold ${
+                                                   task.status?.toLowerCase() === "pending"
+                                                     ? "text-red-500"
+                                                     : task.status?.toLowerCase() === "in_progress"
+                                                     ? "text-blue-500"
+                                                     : "text-green-500"
+                                                 }`}
+                                               >
+                                                 {task.status?.toLowerCase() === "pending"
+                                                   ? "En attente"
+                                                   : task.status?.toLowerCase() === "in_progress"
+                                                   ? "En cours"
+                                                   : "Résolu"}
+                                               </span>
+                                             </li>
+                                           ))}
+                                         </ul>
+                                       )}
+                                     </motion.div>
+                                   </div>
+                                 </div>
+                   
+                                 {/* Bottom Row: Email Writer and Maintenance Requests */}
+                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                                   {/* Email Writer */}
+                                   <motion.div
+                                     initial={{ opacity: 0, y: 20 }}
+                                     animate={{ opacity: 1, y: 0 }}
+                                     transition={{ duration: 0.5 }}
+                                     className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                                   >
+                                     <h2 className="text-xl font-bold mb-4 text-center flex items-center justify-center gap-2">
+                                       <FaEnvelope className="text-blue-500 text-2xl" />
+                                       Envoyer un Message
+                                     </h2>
+                                     <form onSubmit={handleEmailSubmit} className="space-y-4">
+                                       <div className="flex gap-4">
+                                         <div className="flex-1">
+                                           <label className="block text-sm font-medium mb-1">Type de destinataire</label>
+                                           <select
+                                             value={emailForm.recipientType}
+                                             onChange={(e) => {
+                                               setEmailForm({ ...emailForm, recipientType: e.target.value, recipientId: "" });
+                                             }}
+                                             className={`w-full p-2 border rounded text-sm transition-all duration-300 focus:ring-2 focus:ring-blue-500 ${
+                                               darkMode ? "bg-gray-700 text-gray-200 border-gray-600" : "bg-white text-gray-800 border-gray-300"
+                                             }`}
+                                             required
+                                           >
+                                             <option value="">Sélectionnez un type</option>
+                                             <option value="admin">Administrateur</option>
+                                             <option value="owner">Propriétaire</option>
+                                           </select>
+                                         </div>
+                                         {emailForm.recipientType && (
+                                           <div className="flex-1">
+                                             <label className="block text-sm font-medium mb-1">Destinataire</label>
+                                             <select
+                                               value={emailForm.recipientId}
+                                               onChange={(e) => setEmailForm({ ...emailForm, recipientId: e.target.value })}
+                                               className={`w-full p-2 border rounded text-sm transition-all duration-300 focus:ring-2 focus:ring-blue-500 ${
+                                                 darkMode ? "bg-gray-700 text-gray-200 border-gray-600" : "bg-white text-gray-800 border-gray-300"
+                                               }`}
+                                               required
+                                             >
+                                               <option value="">Sélectionnez un destinataire</option>
+                                               {users
+                                                 .filter((u) => u.type === emailForm.recipientType)
+                                                 .map((u) => (
+                                                   <option key={`${u.type}-${u.id}`} value={u.id}>
+                                                     {u.name} ({u.type === "admin" ? "Administrateur" : "Propriétaire"})
+                                                   </option>
+                                                 ))}
+                                             </select>
+                                           </div>
+                                         )}
+                                       </div>
+                                       <div>
+                                         <label className="block text-sm font-medium mb-1">Sujet</label>
+                                         <input
+                                           type="text"
+                                           value={emailForm.subject}
+                                           onChange={(e) => setEmailForm({ ...emailForm, subject: e.target.value })}
+                                           className={`w-full p-2 border rounded text-sm transition-all duration-300 focus:ring-2 focus:ring-blue-500 ${
+                                             darkMode ? "bg-gray-700 text-gray-200 border-gray-600" : "bg-white text-gray-800 border-gray-300"
+                                           }`}
+                                           required
+                                         />
+                                       </div>
+                                       <div>
+                                         <label className="block text-sm font-medium mb-1">Message</label>
+                                         <textarea
+                                           value={emailForm.message}
+                                           onChange={(e) => setEmailForm({ ...emailForm, message: e.target.value })}
+                                           className={`w-full p-2 border rounded text-sm transition-all duration-300 h-24 resize-none focus:ring-2 focus:ring-blue-500 ${
+                                             darkMode ? "bg-gray-700 text-gray-200 border-gray-600" : "bg-white text-gray-800 border-gray-300"
+                                           }`}
+                                           required
+                                         />
+                                       </div>
+                                       <button
+                                         type="submit"
+                                         disabled={emailSending}
+                                         className={`w-full p-3 rounded-lg text-base transition-all duration-300 flex items-center justify-center gap-2 ${
+                                           emailSending
+                                             ? "bg-gray-500 cursor-not-allowed"
+                                             : darkMode
+                                             ? "bg-blue-600 text-white hover:bg-blue-700"
+                                             : "bg-blue-500 text-white hover:bg-blue-600"
+                                         }`}
+                                       >
+                                         <FaPaperPlane />
+                                         {emailSending ? "Envoi en cours..." : "Envoyer le message"}
+                                       </button>
+                                     </form>
+                                   </motion.div>
+                   
+                                   {/* Maintenance Requests */}
+                                   <motion.div
+                                     initial={{ opacity: 0, y: 20 }}
+                                     animate={{ opacity: 1, y: 0 }}
+                                     transition={{ duration: 0.5 }}
+                                     className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                                   >
+                                     <div className="flex justify-between items-center mb-4">
+                                       <h2 className="text-xl font-bold">Demandes de Maintenance Récentes</h2>
+                                       <Link
+                                         to={`/${userType}/maintenancerequests`}
+                                         className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 text-sm flex items-center gap-1 relative group"
+                                         aria-label="Voir toutes les demandes de maintenance"
+                                       >
+                                         <FaWrench />
+                                         Voir toutes les demandes
+                                         <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Voir toutes les demandes</span>
+                                       </Link>
+                                     </div>
+                                     {maintenanceRequests.length === 0 ? (
+                                       renderEmptyPlaceholder("Aucune demande de maintenance récente.")
+                                     ) : (
+                                       <ul className="space-y-2">
+                                         {maintenanceRequests.map((request) => (
+                                           <li key={request.id} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
+                                             <span>Chambre {request.room_no}: {request.description}</span>
+                                             <span
+                                               className={`text-xs font-semibold ${
+                                                 request.status?.toLowerCase() === "pending"
+                                                   ? "text-red-500"
+                                                   : request.status?.toLowerCase() === "in_progress"
+                                                   ? "text-blue-500"
+                                                   : request.status?.toLowerCase() === "resolved"
+                                                   ? "text-green-500"
+                                                   : "text-gray-400 dark:text-gray-500"
+                                               }`}
+                                             >
+                                               {request.status?.toLowerCase() === "pending"
+                                                 ? "En attente"
+                                                 : request.status?.toLowerCase() === "in_progress"
+                                                 ? "En cours"
+                                                 : request.status?.toLowerCase() === "resolved"
+                                                 ? "Résolu"
+                                                 : "Inconnu"}
+                                             </span>
+                                           </li>
+                                         ))}
+                                       </ul>
+                                     )}
+                                   </motion.div>
+                                 </div>
+                               </div>
+                             )}
+                   
+                             {userType === "admin" && (
+                               <div className="flex-1 flex flex-col gap-8">
+                                 {/* Middle Row: Dashboard Cards, Actions/System Stats */}
+                                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                                   {/* Dashboard Cards and User Distribution Chart */}
+                                   <div className="lg:col-span-2 flex flex-col gap-8">
+                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
+                                       {forBox.map((ele, index) => (
+                                         <motion.div
+                                           key={index + 1}
+                                           initial={{ opacity: 0, y: 20 }}
+                                           animate={{ opacity: 1, y: 0 }}
+                                           transition={{ duration: 0.5, delay: index * 0.1 }}
+                                           className={`p-6 rounded-xl shadow-lg transform hover:-translate-y-1 transition-all duration-300 flex items-center gap-4 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 border-l-4 border-blue-500 w-full border border-gray-200 dark:border-gray-700`}
+                                         >
+                                           <div className="text-3xl text-blue-500">{ele.icon}</div>
+                                           <div>
+                                             <h1 className="font-bold text-2xl">{ele.value}</h1>
+                                             <p className="font-semibold text-sm uppercase text-gray-500 dark:text-gray-400 mt-2 tracking-wide">
+                                               {ele.label}
+                                             </p>
+                                           </div>
+                                         </motion.div>
+                                       ))}
+                                     </div>
+                   
+                                     <motion.div
+                                       initial={{ opacity: 0, y: 20 }}
+                                       animate={{ opacity: 1, y: 0 }}
+                                       transition={{ duration: 0.5 }}
+                                       className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                                     >
+                                       <h2 className="text-xl font-bold mb-4 text-center">Répartition des Utilisateurs</h2>
+                                       <div className="h-64">
+                                         <canvas ref={canvasRef} height="200"></canvas>
+                                       </div>
+                                       <div className="mt-4">
+                                         <h3 className="text-sm font-semibold mb-2">Légende :</h3>
+                                         <ul className="text-sm space-y-1">
+                                           <li className="flex items-center">
+                                             <span className="inline-block w-4 h-4 mr-2 rounded-full" style={{ backgroundColor: "rgba(34, 197, 94, 0.7)" }}></span>
+                                             Propriétaires
+                                           </li>
+                                           <li className="flex items-center">
+                                             <span className="inline-block w-4 h-4 mr-2 rounded-full" style={{ backgroundColor: "rgba(54, 162, 235, 0.7)" }}></span>
+                                             Locataires
+                                           </li>
+                                           <li className="flex items-center">
+                                             <span className="inline-block w-4 h-4 mr-2 rounded-full" style={{ backgroundColor: "rgba(249, 115, 22, 0.7)" }}></span>
+                                             Employés
+                                           </li>
+                                         </ul>
+                                       </div>
+                                     </motion.div>
+                                   </div>
+                   
+                                   {/* Actions Rapides, État du Système, Aperçu des Statistiques Rapides */}
+                                   <div className="lg:col-span-1 flex flex-col gap-8">
+                                     <motion.div
+                                       initial={{ opacity: 0, y: 20 }}
+                                       animate={{ opacity: 1, y: 0 }}
+                                       transition={{ duration: 0.5 }}
+                                       className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                                     >
+                                       <div className="flex justify-between items-center mb-4">
+                                         <h2 className="text-xl font-bold">Actions Rapides</h2>
+                                         <button
+                                           onClick={refreshAdminData}
+                                           className="p-2 rounded-full transition-all duration-300 bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 relative group"
+                                           aria-label="Actualiser les données"
+                                         >
+                                           <FaSyncAlt className={statsLoading ? "animate-spin" : ""} size={16} />
+                                           <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-10 left-1/2 transform -translate-x-1/2">Actualiser</span>
+                                         </button>
+                                       </div>
+                                       <div className="flex flex-col gap-3">
+                                         <Link
+                                           to="/admin/tenantdetails"
+                                           className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+                                           aria-label="Voir les locataires"
+                                         >
+                                           <FaUsers />
+                                           Voir les locataires
+                                         </Link>
+                                         <Link
+                                           to="/admin/createowner"
+                                           className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+                                           aria-label="Créer un propriétaire"
+                                         >
+                                           <FaPlus />
+                                           Créer un propriétaire
+                                         </Link>
+                                         <button
+                                           onClick={exportUserData}
+                                           className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base bg-green-500 text-white hover:bg-green-600 dark:bg-green-600 dark:hover:bg-green-700"
+                                           aria-label="Exporter les données"
+                                         >
+                                           <FaDownload />
+                                           Exporter les données
+                                         </button>
+                                       </div>
+                                     </motion.div>
+                   
+                                     <motion.div
+                                       initial={{ opacity: 0, y: 20 }}
+                                       animate={{ opacity: 1, y: 0 }}
+                                       transition={{ duration: 0.5 }}
+                                       className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                                     >
+                                       <h2 className="text-xl font-bold mb-4 text-center">État du Système</h2>
+                                       {statsLoading ? (
+                                         renderSkeletonLoader()
+                                       ) : statsError ? (
+                                         <div className="text-sm text-red-500">
+                                           <p>{statsError}</p>
+                                           <button
+                                             onClick={fetchSystemStatusAndQuickStats}
+                                             className="mt-2 text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300"
+                                             aria-label="Réessayer de charger les statistiques"
+                                           >
+                                             Réessayer
+                                           </button>
+                                         </div>
+                                       ) : (
+                                         <div className="space-y-3">
+                                           <div className="text-base flex items-center gap-2">
+                                             <FaServer className="text-blue-500 text-2xl" />
+                                             <span className="font-semibold">Temps de disponibilité:</span>
+                                             <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-3">
+                                               <div
+                                                 className="bg-blue-500 h-3 rounded-full transition-all duration-500"
+                                                 style={{ width: systemStatus.uptime }}
+                                               ></div>
+                                             </div>
+                                             <span>{systemStatus.uptime}</span>
+                                           </div>
+                                           <p className="text-base flex items-center gap-2">
+                                             <FaUsers className="text-blue-500 text-2xl" />
+                                             <span className="font-semibold">Utilisateurs actifs:</span> {systemStatus.activeUsers}
+                                           </p>
+                                           <p className="text-base flex items-center gap-2">
+                                             <FaExclamationCircle className={systemStatus.alerts > 0 ? "text-red-500 text-2xl" : "text-green-500 text-2xl"} />
+                                             <span className="font-semibold">Alertes récentes:</span>
+                                             <span className={systemStatus.alerts > 0 ? "text-red-500" : "text-green-500"}>
+                                               {systemStatus.alerts}
+                                             </span>
+                                           </p>
+                                         </div>
+                                       )}
+                                     </motion.div>
+                   
+                                     <motion.div
+                                       initial={{ opacity: 0, y: 20 }}
+                                       animate={{ opacity: 1, y: 0 }}
+                                       transition={{ duration: 0.5 }}
+                                       className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                                     >
+                                       <h2 className="text-xl font-bold mb-4 text-center">Aperçu des Statistiques Rapides</h2>
+                                       {statsLoading ? (
+                                         renderSkeletonLoader()
+                                       ) : statsError ? (
+                                         <div className="text-sm text-red-500">
+                                           <p>{statsError}</p>
+                                           <button
+                                             onClick={fetchSystemStatusAndQuickStats}
+                                             className="mt-2 text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300"
+                                             aria-label="Réessayer de charger les statistiques"
+                                           >
+                                             Réessayer
+                                           </button>
+                                         </div>
+                                       ) : (
+                                         <div className="space-y-3">
+                                           <p className="text-base flex items-center gap-2">
+                                             <FaUsers className="text-blue-500 text-2xl" />
+                                             <span className="font-semibold">Connexions aujourd'hui:</span> {quickStats.totalLoginsToday}
+                                           </p>
+                                           <p className="text-base flex items-center gap-2">
+                                             <FaExclamationTriangle className="text-yellow-500 text-2xl" />
+                                             <span className="font-semibold">Plaintes déposées:</span> {quickStats.totalComplaintsFiled}
+                                           </p>
+                                           <p className="text-base flex items-center gap-2">
+                                             <FaExclamationCircle className="text-red-500 text-2xl" />
+                                             <span className="font-semibold">Demandes en attente:</span> {quickStats.pendingRequests}
+                                           </p>
+                                         </div>
+                                       )}
+                                     </motion.div>
+                                   </div>
+                                 </div>
+                   
+                                 {/* Bottom Row: Recent Activities, Quick Links, Maintenance Requests */}
+                                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                                   {/* Recent Activities */}
+                                   <motion.div
+                                     initial={{ opacity: 0, y: 20 }}
+                                     animate={{ opacity: 1, y: 0 }}
+                                     transition={{ duration: 0.5 }}
+                                     className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                                   >
+                                     <div className="flex justify-between items-center mb-4">
+                                       <h2 className="text-xl font-bold">Activités Récentes</h2>
+                                       <div className="flex items-center gap-2">
+                                         <div className="relative group">
+                                           <input
+                                             type="date"
+                                             value={activityFilterDate}
+                                             onChange={(e) => {
+                                               setActivityFilterDate(e.target.value);
+                                               handleActivityFilter(e.target.value);
+                                             }}
+                                             className="p-2 border rounded text-sm focus:ring-2 focus:ring-blue-500 transition-all duration-300 bg-white text-gray-800 border-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600"
+                                             aria-label="Filtrer les activités par date"
+                                           />
+                                           <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-10 left-1/2 transform -translate-x-1/2">Filtrer par date</span>
+                                         </div>
+                                         <button
+                                           onClick={() => {
+                                             setActivityFilterDate("");
+                                             handleActivityFilter("");
+                                           }}
+                                           className="p-2 rounded-full transition-all duration-300 bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500 relative group"
+                                           aria-label="Effacer le filtre"
+                                         >
+                                           <FaFilter size={16} />
+                                           <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-10 left-1/2 transform -translate-x-1/2">Effacer le filtre</span>
+                                         </button>
+                                       </div>
+                                     </div>
+                                     {filteredActivities.length === 0 ? (
+                                       renderEmptyPlaceholder("Aucune activité récente.")
+                                     ) : (
+                                       <>
+                                         <ul className="space-y-2">
+                                           {(showAllActivities ? filteredActivities : filteredActivities.slice(0, 4)).map((activity, index) => (
+                                             <li key={index} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
+                                               <span>{activity.action}</span>
+                                               <div className="flex items-center gap-2">
+                                                 <span className="text-xs text-gray-400 dark:text-gray-500">
+                                                   {new Date(activity.date).toLocaleString()}
+                                                 </span>
+                                                 <button
+                                                   onClick={() => markActivityAsRead(index)}
+                                                   className="text-green-500 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300 transition-all duration-300 text-sm relative group"
+                                                   aria-label="Marquer comme lu"
+                                                 >
+                                                   <FaCheck />
+                                                   <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Marquer comme lu</span>
+                                                 </button>
+                                               </div>
+                                             </li>
+                                           ))}
+                                         </ul>
+                                         {filteredActivities.length > 4 && (
+                                           <button
+                                             onClick={() => setShowAllActivities(!showAllActivities)}
+                                             className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 text-sm mt-3"
+                                             aria-label={showAllActivities ? "Afficher moins d'activités" : "Afficher plus d'activités"}
+                                           >
+                                             {showAllActivities ? "Afficher moins" : "Afficher plus"}
+                                           </button>
+                                         )}
+                                       </>
+                                     )}
+                                   </motion.div>
+                   
+                                   {/* Quick Links */}
+                                   <motion.div
+                                     initial={{ opacity: 0, y: 20 }}
+                                     animate={{ opacity: 1, y: 0 }}
+                                     transition={{ duration: 0.5 }}
+                                     className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                                   >
+                                     <h2 className="text-xl font-bold mb-4 text-center">Liens Rapides</h2>
+                                     <div className="flex flex-col gap-3">
+                                       {quickLinks.map((link, index) => (
+                                         <Link
+                                           key={index}
+                                           to={link.url}
+                                           className="p-3 rounded-lg shadow-md text-center transition-all duration-300 flex items-center justify-center gap-2 text-base w-full bg-blue-500 text-white hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+                                           aria-label={link.name}
+                                         >
+                                           {link.icon}
+                                           {link.name}
+                                         </Link>
+                                       ))}
+                                     </div>
+                                   </motion.div>
+                   
+                                   {/* Maintenance Requests */}
+                                   <motion.div
+                                     initial={{ opacity: 0, y: 20 }}
+                                     animate={{ opacity: 1, y: 0 }}
+                                     transition={{ duration: 0.5 }}
+                                     className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                                   >
+                                     <div className="flex justify-between items-center mb-4">
+                                       <h2 className="text-xl font-bold">Demandes de Maintenance Récentes</h2>
+                                       <Link
+                                         to={`/${userType}/maintenancerequests`}
+                                         className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 text-sm flex items-center gap-1 relative group"
+                                         aria-label="Voir toutes les demandes de maintenance"
+                                       >
+                                         <FaWrench />
+                                         Voir toutes les demandes
+                                         <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">Voir toutes les demandes</span>
+                                       </Link>
+                                     </div>
+                                     {maintenanceRequests.length === 0 ? (
+                                       renderEmptyPlaceholder("Aucune demande de maintenance récente.")
+                                     ) : (
+                                       <ul className="space-y-2">
+                                         {maintenanceRequests.map((request) => (
+                                           <li key={request.id} className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded-md">
+                                             <span>Chambre {request.room_no}: {request.description}</span>
+                                             <span
+                                               className={`text-xs font-semibold ${
+                                                 request.status?.toLowerCase() === "pending"
+                                                   ? "text-red-500"
+                                                   : request.status?.toLowerCase() === "in_progress"
+                                                   ? "text-blue-500"
+                                                   : request.status?.toLowerCase() === "resolved"
+                                                   ? "text-green-500"
+                                                   : "text-gray-400 dark:text-gray-500"
+                                               }`}
+                                             >
+                                               {request.status?.toLowerCase() === "pending"
+                                                 ? "En attente"
+                                                 : request.status?.toLowerCase() === "in_progress"
+                                                 ? "En cours"
+                                                 : request.status?.toLowerCase() === "resolved"
+                                                 ? "Résolu"
+                                                 : "Inconnu"}
+                                             </span>
+                                           </li>
+                                         ))}
+                                       </ul>
+                                     )}
+                                   </motion.div>
+                                 </div>
+                               </div>
+                             )}
+                   
+                             {/* Footer Row: Apartment Rules (Common for All User Types) */}
+                             <motion.div
+                               initial={{ opacity: 0, y: 20 }}
+                               animate={{ opacity: 1, y: 0 }}
+                               transition={{ duration: 0.5 }}
+                               className="rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl max-h-96 overflow-y-auto bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 w-full border border-gray-200 dark:border-gray-700"
+                             >
+                               <div className="flex justify-between items-center mb-4">
+                                 <h1 className="text-xl font-bold">Règles et Régulations de l'Appartement</h1>
+                                 <button
+                                   onClick={toggleRules}
+                                   className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-all duration-300 relative group"
+                                   aria-label={showRules ? "Masquer les règles" : "Afficher les règles"}
+                                 >
+                                   {showRules ? <FaChevronUp size={16} /> : <FaChevronDown size={16} />}
+                                   <span className="absolute hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2">
+                                     {showRules ? "Masquer" : "Afficher"}
+                                   </span>
+                                 </button>
+                               </div>
+                               <AnimatePresence>
+                                 {showRules && (
+                                   <motion.div
+                                     initial={{ opacity: 0, height: 0 }}
+                                     animate={{ opacity: 1, height: "auto" }}
+                                     exit={{ opacity: 0, height: 0 }}
+                                     transition={{ duration: 0.3 }}
+                                     className="text-gray-600 dark:text-gray-400 space-y-4 text-base"
+                                   >
+                                     {rules.map((section, sectionIndex) => (
+                                       <div key={sectionIndex} className="space-y-2">
+                                         <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-100">
+                                           {section.section}
+                                         </h2>
+                                         {section.content && (
+                                           <p className="text-base">{section.content}</p>
+                                         )}
+                                         {section.rules && (
+                                           <ul className="space-y-2">
+                                             {section.rules.map((rule) => (
+                                               <li key={rule.id}>
+                                                 <span className="font-medium text-gray-800 dark:text-gray-100">
+                                                   {rule.id} {rule.title}
+                                                 </span>
+                                                 <ul className="list-disc pl-6 mt-1 space-y-1">
+                                                   {rule.subrules.map((subrule) => (
+                                                     <li key={subrule.id} className="text-base">
+                                                       <span className="font-medium">{subrule.id}</span> {subrule.text}
+                                                     </li>
+                                                   ))}
+                                                 </ul>
+                                               </li>
+                                             ))}
+                                           </ul>
+                                         )}
+                                       </div>
+                                     ))}
+                                   </motion.div>
+                                 )}
+                               </AnimatePresence>
+                             </motion.div>
+                           </div>
+                         )}
+                       </div>
+                     );
+                   }
+                   
+                   export default Dashboard;

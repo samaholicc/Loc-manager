@@ -1,5 +1,6 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
+import axios from "axios";
 import { ThemeProvider } from "./context/ThemeContext";
 import Header from "./components/Header";
 import Dashboard from "./components/Dashboard";
@@ -25,10 +26,16 @@ import Verified from "./components/Verified";
 import UserManual from "./components/UserManual";
 import Support from "./components/Support";
 import ManagementPortal from "./components/ManagementPortal";
+import { toast } from "react-toastify";
 
 function App() {
   const navigate = useNavigate();
   const location = useLocation();
+
+  // State for tenant data
+  const [tenantRows, setTenantRows] = useState([]);
+  const [tenantLoading, setTenantLoading] = useState(false);
+  const [tenantError, setTenantError] = useState(null);
 
   const forAdmin = [
     { label: "Accueil", path: "home" },
@@ -82,6 +89,56 @@ function App() {
   const navItems = getNavItems();
   const basePath = JSON.parse(window.localStorage.getItem("whom"))?.userType || "";
 
+  // Fetch tenants for owner user type with retry logic
+  const fetchTenants = useCallback(async (attempt = 1, maxAttempts = 3) => {
+    setTenantLoading(true);
+    setTenantError(null);
+    try {
+      const userId = JSON.parse(window.localStorage.getItem("whom"))?.username;
+      if (!userId || typeof userId !== "string") {
+        throw new Error("Invalid userId: userId must be a non-empty string.");
+      }
+
+      const apiUrl = `${process.env.REACT_APP_SERVER}/ownertenantdetails`;
+      console.log(`Attempt ${attempt}/${maxAttempts} - API URL for tenants:`, apiUrl);
+      console.log(`Attempt ${attempt}/${maxAttempts} - Request payload for tenants:`, { userId });
+
+      const res = await axios.post(apiUrl, { userId }, {
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+      console.log(`Attempt ${attempt}/${maxAttempts} - Tenant data from server:`, res.data);
+
+      const data = Array.isArray(res.data) ? res.data : [];
+      if (data.length === 0) {
+        console.warn(`Attempt ${attempt}/${maxAttempts} - No tenants found in response data.`);
+        if (attempt < maxAttempts) {
+          console.log(`Retrying fetch, attempt #${attempt + 1}`);
+          await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait 1 second before retrying
+          return await fetchTenants(attempt + 1, maxAttempts);
+        }
+      }
+      setTenantRows(data);
+    } catch (error) {
+      console.error("Error fetching tenants:", error);
+      console.error("Error response:", error.response);
+      const errorMessage =
+        error.response?.data?.message || "Échec de la récupération des données des locataires";
+      setTenantError(errorMessage);
+      toast.error(errorMessage);
+    } finally {
+      setTenantLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const userType = JSON.parse(window.localStorage.getItem("whom"))?.userType;
+    if (userType === "owner") {
+      fetchTenants();
+    }
+  }, [fetchTenants]);
+
   // Redirect to the correct dashboard if the user is on the wrong route
   useEffect(() => {
     const userType = JSON.parse(window.localStorage.getItem("whom"))?.userType;
@@ -97,7 +154,7 @@ function App() {
       userType &&
       !sharedRoutes.includes(currentPath) &&
       currentPath !== userType &&
-      currentPath !== "" // Allow the root path ("/") for the login page
+      currentPath !== ""
     ) {
       console.log(`Redirecting from /${currentPath} to /${userType}`);
       navigate(`/${userType}`, { replace: true });
@@ -155,7 +212,7 @@ function App() {
                 <Header forHam={[...forOwner.map(item => item.label), "Déconnexion"]} />
                 <section className="flex">
                   <Aside forHam={forOwner} base={'owner'} />
-                  <Dashboard navItems={forOwner} basePath={'owner'} />
+                  <Dashboard navItems={forOwner} basePath={'owner'} tenantRows={tenantRows} tenantLoading={tenantLoading} tenantError={tenantError} />
                 </section>
               </main>
             }
@@ -179,7 +236,7 @@ function App() {
                 <Header forHam={forAdmin.map(item => item.label)} />
                 <section className="dashboardSkeleton">
                   <Aside forHam={forAdmin} base={'admin'} />
-                  <TenantDetails />
+                  <TenantDetails tenantRows={tenantRows} tenantLoading={tenantLoading} tenantError={tenantError} />
                 </section>
               </main>
             }
@@ -215,7 +272,7 @@ function App() {
                 <Header forHam={forAdmin.map(item => item.label)} />
                 <section className="dashboardSkeleton">
                   <Aside forHam={forAdmin} base={'admin'} />
-                  <ComplaintsViewer />
+                  <ComplaintsViewerOwner />
                 </section>
               </main>
             }
@@ -287,7 +344,7 @@ function App() {
                 <Header forHam={forOwner.map(item => item.label)} />
                 <section className="dashboardSkeleton">
                   <Aside forHam={forOwner} base={'owner'} />
-                  <RoomDetailsOwner />
+                  <TenantDetails tenantRows={tenantRows} tenantLoading={tenantLoading} tenantError={tenantError} />
                 </section>
               </main>
             }
@@ -323,7 +380,7 @@ function App() {
                 <Header forHam={forOwner.map(item => item.label)} />
                 <section className="dashboardSkeleton">
                   <Aside forHam={forOwner} base={'owner'} />
-                  <RoomDetails />
+                  <RoomDetailsOwner />
                 </section>
               </main>
             }

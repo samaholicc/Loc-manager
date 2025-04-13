@@ -65,7 +65,6 @@ function RoomDetailsOwner() {
     >
       {/* Particle Background */}
       <Particle />
-      <div className="relative z-20">
       
       <div
         className="container rounded-xl shadow-lg overflow-hidden max-w-6xl transition-all duration-300 bg-white dark:bg-gray-800 flex flex-col gap-8 relative z-20"
@@ -144,7 +143,6 @@ function RoomDetailsOwner() {
         </div>
 
         
-      </div>
       </div>
     </section>
   );

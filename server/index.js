@@ -68,18 +68,19 @@ app.post("/owner", async (req, res) => {
   }
 
   try {
+    const numericId = parseInt(userId.split("-")[1] || userId);
     const sql = `
       SELECT owner_id, name, room_no, email, is_email_verified
       FROM owner 
       WHERE owner_id = ?
     `;
-    const results = await db.query(sql, [userId]);
+    const results = await db.query(sql, [numericId]);
     if (!results || results.length === 0) {
-      return res.status(404).json({ error: "Owner not found for userId: " + userId });
+      return res.status(404).json({ error: "Owner not found for userId: " + numericId });
     }
     res.json({ owner: results[0] });
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /owner:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
@@ -92,22 +93,49 @@ app.post("/tenant", async (req, res) => {
   }
 
   try {
+    const numericId = parseInt(userId.split("-")[1] || userId);
     const sql = `
       SELECT tenant_id, name, dob, age, room_no, email, is_email_verified
       FROM tenant 
       WHERE tenant_id = ?
     `;
-    const results = await db.query(sql, [userId]);
+    const results = await db.query(sql, [numericId]);
     if (!results || results.length === 0) {
-      return res.status(404).json({ error: "Tenant not found for userId: " + userId });
+      return res.status(404).json({ error: "Tenant not found for userId: " + numericId });
     }
     res.json(results);
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /tenant:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
+// Logout endpoint
+app.post("/logout", async (req, res) => {
+  const { userId } = req.body;
+  console.log("Received /logout request:", { userId });
 
+  if (!userId) {
+    console.log("Missing userId in request body");
+    return res.status(400).json({ error: "Missing userId in request body" });
+  }
+
+  try {
+    const numericId = parseInt(userId.split("-")[1] || userId);
+    if (isNaN(numericId)) {
+      console.log("Invalid userId format:", userId);
+      return res.status(400).json({ error: "Invalid userId format" });
+    }
+
+    // Log the logout activity
+    const activitySql = "INSERT INTO activities (user_id, action, date) VALUES (?, ?, NOW())";
+    await db.query(activitySql, [numericId, "Déconnexion utilisateur"]);
+
+    res.status(200).json({ message: "Déconnexion réussie" });
+  } catch (err) {
+    console.error("Error during logout:", err);
+    res.status(500).json({ error: "Erreur serveur lors de la déconnexion: " + err.message });
+  }
+});
 // Default route
 app.get("/", function (req, res) {
   res.send("Only accepting GET and POST requests!");
@@ -170,7 +198,6 @@ app.post("/auth", async (req, res) => {
   else if (username.toUpperCase().charAt(0) === "O" && password.length >= 6) rep = "owner";
 
   try {
-    // Map userType to the corresponding auth table
     const authTableMap = {
       admin: "auth_admin",
       owner: "auth_owner",
@@ -183,9 +210,8 @@ app.post("/auth", async (req, res) => {
       return res.status(400).json({ error: "Invalid user type" });
     }
 
-    // Check if the user exists in the appropriate auth table
+    const numericId = parseInt(username.substring(2));
     const authSql = `SELECT id FROM ${authTable} WHERE id = ? AND password = ?`;
-    const numericId = parseInt(username.substring(2)); // Extract numeric part (e.g., "A-101" -> 101)
     const authResult = await db.query(authSql, [numericId, password]);
 
     if (!authResult || authResult.length === 0) {
@@ -251,7 +277,7 @@ app.get("/verify-email", async (req, res) => {
   }
 
   try {
-    const numericId = parseInt(userId.substring(2)); // Extract numeric part (e.g., "t-101" -> 101)
+    const numericId = parseInt(userId.split("-")[1] || userId);
     let sql;
     if (userType === "admin") {
       sql = "SELECT is_email_verified FROM block_admin WHERE admin_id = ?";
@@ -294,7 +320,7 @@ app.post("/resend-verification", async (req, res) => {
   }
 
   try {
-    const numericId = parseInt(userId.substring(2)); // Extract numeric part (e.g., "t-101" -> 101)
+    const numericId = parseInt(userId.split("-")[1] || userId);
     await db.query("START TRANSACTION");
 
     try {
@@ -313,24 +339,18 @@ app.post("/resend-verification", async (req, res) => {
       }
 
       const queryResult = await db.query(sql, [numericId]);
-      console.log("Full query result:", queryResult);
-
       if (!Array.isArray(queryResult) || queryResult.length < 1) {
         await db.query("ROLLBACK");
         return res.status(500).json({ error: "Unexpected query result format" });
       }
 
       const rows = queryResult[0];
-      console.log("Rows from query:", rows);
-
       if (!rows || (Array.isArray(rows) && rows.length === 0)) {
         await db.query("ROLLBACK");
         return res.status(404).json({ error: "User not found" });
       }
 
       const user = Array.isArray(rows) ? rows[0] : rows;
-      console.log("User object:", user);
-
       if (!user || !user.email) {
         await db.query("ROLLBACK");
         return res.status(404).json({ error: "Email not found for user" });
@@ -437,12 +457,10 @@ app.post("/createowner", async (req, res) => {
   try {
     await db.query("START TRANSACTION");
 
-    // Insert into owner table (owner_id auto-increments)
-    const ownerSql = "INSERT INTO owner (name, email, age, roomno, password, aggrementStatus, dob) VALUES (?, ?, ?, ?, ?, ?, ?)";
+    const ownerSql = "INSERT INTO owner (name, email, age, room_no, password, aggrement_status, dob) VALUES (?, ?, ?, ?, ?, ?, ?)";
     const [ownerResult] = await db.query(ownerSql, [name, email, age, roomno, password, aggrementStatus, dob]);
     const newOwnerId = ownerResult.insertId;
 
-    // Insert into auth_owner table
     const authSql = "INSERT INTO auth_owner (id, password) VALUES (?, ?)";
     await db.query(authSql, [newOwnerId, password]);
 
@@ -461,7 +479,7 @@ app.get("/available-rooms", async (req, res) => {
   try {
     const availableRooms = await db.getAvailableRooms();
     res.status(200).json(availableRooms);
-  } catch (err  ) {
+  } catch (err) {
     console.error("Erreur lors de la récupération des chambres disponibles:", err);
     res.status(500).json({ message: "Erreur serveur lors de la récupération des chambres disponibles", error: err.message });
   }
@@ -491,54 +509,79 @@ app.get("/ownerdetails", async (req, res) => {
 
 // Fetch parking slots for a user
 app.post("/viewparking", async (req, res) => {
-  const id = req.body.userId;
+  const { userId } = req.body;
+  if (!userId) {
+    return res.status(400).json({ error: "Missing userId in request body" });
+  }
   try {
-    const result = await db.viewparking(id);
+    const numericId = parseInt(userId.split("-")[1] || userId);
+    const result = await db.viewparking(`t-${numericId}`);
     res.send(result);
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /viewparking:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
+
 // Fetch owner complaints
 app.post("/ownercomplaints", async (req, res) => {
-  const ownerid = req.body.userId;
-  if (!ownerid) {
+  const { userId } = req.body;
+  console.log("Received /ownercomplaints request:", { userId });
+
+  if (!userId) {
+    console.log("Missing userId in request body");
     return res.status(400).json({ error: "Missing userId in request body" });
   }
 
+  if (typeof userId !== "string") {
+    console.log("Invalid userId format: userId must be a string, received:", userId);
+    return res.status(400).json({ error: "Invalid userId format: userId must be a string" });
+  }
+
   try {
-    // Ensure ownerid is numeric
-    const numericId = parseInt(ownerid);
+    const numericId = parseInt(userId.split("-")[1] || userId);
     if (isNaN(numericId)) {
+      console.log("Invalid userId format: Could not parse numeric ID from userId:", userId);
       return res.status(400).json({ error: "User ID must be a valid number" });
     }
+
     const result = await db.ownercomplaints(numericId);
-    res.send(result);
+    console.log("Owner complaints result:", result);
+    // Ensure result is an array
+    const responseData = Array.isArray(result) ? result : [];
+    res.send(responseData);
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /ownercomplaints:", {
+      message: err.message,
+      stack: err.stack,
+    });
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
+
 // Fetch all complaints
 app.get("/viewcomplaints", async (req, res) => {
   try {
     const result = await db.viewcomplaints();
     res.send(result);
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /viewcomplaints:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
 
 // Fetch owner room details
 app.post("/ownerroomdetails", async (req, res) => {
-  const ownerId = req.body.userId;
+  const { userId } = req.body;
+  if (!userId) {
+    return res.status(400).json({ error: "Missing userId in request body" });
+  }
   try {
-    const result = await db.ownerroomdetails(ownerId);
+    const numericId = parseInt(userId.split("-")[1] || userId);
+    const result = await db.ownerroomdetails(`o-${numericId}`);
     res.send(result);
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /ownerroomdetails:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
@@ -557,69 +600,146 @@ app.post("/bookslot", async (req, res) => {
     await db.query(sql, [slotNo, roomNo]);
     res.json({ message: "Place de parking réservée avec succès" });
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /bookslot:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
 
 // Fetch owner tenant details
 app.post("/ownertenantdetails", async (req, res) => {
-  const id = req.body.userId;
+  const { userId } = req.body;
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] Received /ownertenantdetails request:`, { userId });
+
+  if (!userId) {
+    console.log(`[${timestamp}] Missing userId in request body`);
+    return res.status(400).json({ error: "Missing userId in request body" });
+  }
+
   try {
-    const result = await db.ownertenantdetails(id);
-    res.send(result);
+    const numericId = parseInt(userId.split("-")[1] || userId);
+    console.log(`[${timestamp}] Parsed numericId:`, numericId);
+
+    const query = `
+      SELECT tenant_id, name, dob, stat, room_no, age 
+      FROM tenant 
+      WHERE room_no IN (
+        SELECT room_no 
+        FROM owner 
+        WHERE owner_id IN (
+          SELECT id 
+          FROM auth_owner 
+          WHERE id = ?
+        )
+      )
+    `;
+    console.log(`[${timestamp}] Executing query:`, query, "with params:", [numericId]);
+
+    // Execute the query directly
+    const result = await db.query(query, [numericId]);
+    console.log(`[${timestamp}] Raw query result:`, result);
+
+    // Normalize the result to always be an array of tenant objects
+    let responseData = Array.isArray(result) ? result : [];
+    if (!Array.isArray(result) && result && typeof result === "object") {
+      responseData = [result];
+    }
+
+    console.log(`[${timestamp}] Returning results:`, responseData);
+    res.status(200).json(responseData);
+    res.end();
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error(`[${timestamp}] Erreur serveur in /ownertenantdetails:`, err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
+    res.end();
   }
 });
-
 // Pay maintenance
 app.post("/paymaintanance", async (req, res) => {
-  const userId = req.body.id;
+  const { id } = req.body;
+  if (!id) {
+    return res.status(400).json({ error: "Missing id in request body" });
+  }
   try {
-    await db.paymaintanence(userId);
+    await db.paymaintanence(id);
+    const numericId = parseInt(id.split("-")[1] || id);
     const activitySql = "INSERT INTO activities (user_id, action, date) VALUES (?, ?, NOW())";
-    await db.query(activitySql, [userId, "Maintenance payé"]);
+    await db.query(activitySql, [numericId, "Maintenance payé"]);
     res.sendStatus(200);
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /paymaintanance:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
 
 // Delete tenant
 app.post("/deletetenant", async (req, res) => {
-  const id = req.body.userId;
+  const { userId } = req.body;
+  if (!userId) {
+    return res.status(400).json({ error: "Missing userId in request body" });
+  }
   try {
-    await db.deletetenant(id);
+    const numericId = parseInt(userId.split("-")[1] || userId);
+    await db.deletetenant(numericId);
     res.sendStatus(200);
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /deletetenant:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
+app.put("/updatemaintenancerequest/:id", async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+  const whom = JSON.parse(req.headers["whom"])?.userType;
 
+  if (!["admin", "owner", "employee"].includes(whom)) {
+    return res.status(403).json({ error: "Seuls les administrateurs, propriétaires ou employés peuvent mettre à jour les demandes de maintenance." });
+  }
+
+  if (!["pending", "in_progress", "resolved"].includes(status)) {
+    return res.status(400).json({ error: "Statut invalide. Les valeurs autorisées sont : 'pending', 'in_progress', 'resolved'." });
+  }
+
+  try {
+    const sql = "UPDATE maintenance_requests SET status = ? WHERE id = ?";
+    const result = await db.query(sql, [status, id]);
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Demande de maintenance non trouvée." });
+    }
+    res.json({ message: "Statut de la demande mis à jour avec succès." });
+  } catch (err) {
+    console.error("Erreur serveur in /updatemaintenancerequest:", err);
+    res.status(500).json({ error: "Erreur serveur: " + err.message });
+  }
+});
 // Delete owner
 app.post("/deleteowner", async (req, res) => {
-  const id = req.body.userId;
+  const { userId } = req.body;
+  if (!userId) {
+    return res.status(400).json({ error: "Missing userId in request body" });
+  }
   try {
-    await db.deleteowner(id);
+    const numericId = parseInt(userId.split("-")[1] || userId);
+    await db.deleteowner(numericId);
     res.sendStatus(200);
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /deleteowner:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
 
 // Delete employee
 app.post("/deletemployee", async (req, res) => {
-  const id = req.body.userId;
+  const { userId } = req.body;
+  if (!userId) {
+    return res.status(400).json({ error: "Missing userId in request body" });
+  }
   try {
-    await db.deleteemployee(id);
+    const numericId = parseInt(userId.split("-")[1] || userId);
+    await db.deleteemployee(numericId);
     res.sendStatus(200);
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /deletemployee:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
@@ -627,41 +747,50 @@ app.post("/deletemployee", async (req, res) => {
 // Delete complaint
 app.post("/deletecomplaint", async (req, res) => {
   const { room_no } = req.body;
+  if (!room_no) {
+    return res.status(400).json({ error: "Missing room_no in request body" });
+  }
   try {
     await db.deletecomplaint(room_no);
     res.json({ message: "Complaint resolved successfully" });
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /deletecomplaint:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
 
 // Fetch recent activities
 app.post("/recentactivities", async (req, res) => {
-  const { userId, userType } = req.body;
-  console.log("Received /recentactivities request:", { userId, userType });
-
-  if (!userId || !userType) {
-    console.log("Validation failed: Missing userId or userType");
-    return res.status(400).json({ error: "Missing userId or userType in request body" });
-  }
-
-  const numericId = parseInt(userId.substring(2)); // Extract numeric part (e.g., "t-101" -> 101)
-  let sql = "";
-  const params = userType === "admin" ? [] : [numericId];
-  if (userType === "tenant") {
-    sql = "SELECT action, date FROM activities WHERE user_id = ? ORDER BY date DESC LIMIT 5";
-  } else if (userType === "owner") {
-    sql = "SELECT action, date FROM activities WHERE user_id = ? ORDER BY date DESC LIMIT 5";
-  } else if (userType === "admin") {
-    sql = "SELECT action, date FROM activities ORDER BY date DESC LIMIT 5";
-  } else {
-    console.log("Validation failed: Invalid userType:", userType);
-    return res.status(400).json({ error: "Invalid userType. Must be 'tenant', 'owner', or 'admin'" });
-  }
-
   try {
+    const { userId, userType } = req.body;
+    console.log("Received /recentactivities request:", { userId, userType });
+
+    if (!userId || !userType) {
+      console.log("Validation failed: Missing userId or userType");
+      return res.status(400).json({ error: "Missing userId or userType in request body" });
+    }
+
+    const numericId = parseInt(userId.split("-")[1] || userId);
+    if (isNaN(numericId)) {
+      console.log("Validation failed: Invalid userId format:", userId);
+      return res.status(400).json({ error: "Invalid userId format" });
+    }
+
+    let sql = "";
+    const params = userType === "admin" ? [] : [numericId];
+    if (userType === "tenant") {
+      sql = "SELECT action, date FROM activities WHERE user_id = ? ORDER BY date DESC LIMIT 5";
+    } else if (userType === "owner") {
+      sql = "SELECT action, date FROM activities WHERE user_id = ? ORDER BY date DESC LIMIT 5";
+    } else if (userType === "admin") {
+      sql = "SELECT action, date FROM activities ORDER BY date DESC LIMIT 5";
+    } else {
+      console.log("Validation failed: Invalid userType:", userType);
+      return res.status(400).json({ error: "Invalid userType. Must be 'tenant', 'owner', or 'admin'" });
+    }
+
     const results = await db.query(sql, params);
+    console.log("Recent activities result:", results);
     res.json(results);
   } catch (err) {
     console.error("Error fetching recent activities:", err);
@@ -670,32 +799,38 @@ app.post("/recentactivities", async (req, res) => {
 });
 
 app.post("/notifications", async (req, res) => {
-  const { userId, userType } = req.body;
-  console.log("Received /notifications request:", { userId, userType });
-
-  if (!userId || !userType) {
-    console.log("Validation failed: Missing userId or userType");
-    return res.status(400).json({ error: "Missing userId or userType in request body" });
-  }
-
-  const numericId = parseInt(userId.substring(2));
-  let sql = "";
-  const params = userType === "admin" ? [] : [numericId];
-  if (userType === "tenant") {
-    sql = "SELECT message, date FROM notifications WHERE user_id = ? ORDER BY date DESC LIMIT 5";
-  } else if (userType === "owner") {
-    sql = "SELECT message, date FROM notifications WHERE user_id = ? ORDER BY date DESC LIMIT 5";
-  } else if (userType === "admin") {
-    sql = "SELECT message, date FROM notifications ORDER BY date DESC LIMIT 5";
-  } else if (userType === "employee") {
-    sql = "SELECT message, date FROM notifications WHERE user_id = ? ORDER BY date DESC LIMIT 5";
-  } else {
-    console.log("Validation failed: Invalid userType:", userType);
-    return res.status(400).json({ error: "Invalid userType. Must be 'tenant', 'owner', 'admin', or 'employee'" });
-  }
-
   try {
+    const { userId, userType } = req.body;
+    console.log("Received /notifications request:", { userId, userType });
+
+    if (!userId || !userType) {
+      console.log("Validation failed: Missing userId or userType");
+      return res.status(400).json({ error: "Missing userId or userType in request body" });
+    }
+
+    const numericId = parseInt(userId.split("-")[1] || userId);
+    if (isNaN(numericId)) {
+      console.log("Validation failed: Invalid userId format:", userId);
+      return res.status(400).json({ error: "Invalid userId format" });
+    }
+
+    let sql = "";
+    const params = userType === "admin" ? [] : [numericId];
+    if (userType === "tenant") {
+      sql = "SELECT message, date FROM notifications WHERE user_id = ? ORDER BY date DESC LIMIT 5";
+    } else if (userType === "owner") {
+      sql = "SELECT message, date FROM notifications WHERE user_id = ? ORDER BY date DESC LIMIT 5";
+    } else if (userType === "admin") {
+      sql = "SELECT message, date FROM notifications ORDER BY date DESC LIMIT 5";
+    } else if (userType === "employee") {
+      sql = "SELECT message, date FROM notifications WHERE user_id = ? ORDER BY date DESC LIMIT 5";
+    } else {
+      console.log("Validation failed: Invalid userType:", userType);
+      return res.status(400).json({ error: "Invalid userType. Must be 'tenant', 'owner', 'admin', or 'employee'" });
+    }
+
     const results = await db.query(sql, params);
+    console.log("Notifications result:", results);
     res.json(results);
   } catch (err) {
     console.error("Error fetching notifications:", err);
@@ -749,53 +884,69 @@ app.get("/weather", async (req, res) => {
 
 // Fetch maintenance requests
 app.post("/maintenancerequests", async (req, res) => {
-  const { userId, userType, page = 1, all = false } = req.body;
-  console.log("Received /maintenancerequests request:", { userId, userType, page, all });
+  const { userId, userType, page, limit = 2, all } = req.body;
+  const pageNum = parseInt(page) || 1;
+  const pageSize = parseInt(limit) || 2;
+  const offset = (pageNum - 1) * pageSize;
 
   if (!userId || !userType) {
-    console.log("Validation failed: Missing userId or userType");
-    return res.status(400).json({ error: "Missing userId or userType in request body" });
-  }
-
-  const numericId = parseInt(userId.substring(2)); // Extract numeric part (e.g., "t-101" -> 101)
-  const limit = 10;
-  const offset = (page - 1) * limit;
-
-  let sql = "";
-  const params = [];
-  if (userType === "tenant") {
-    sql = "SELECT id, room_no, description, status, submitted_at FROM maintenance_requests WHERE user_id = ? AND user_type = ?";
-    params.push(numericId, userType);
-  } else if (userType === "owner") {
-    sql = `
-      SELECT mr.id, mr.room_no, mr.description, mr.status, mr.submitted_at 
-      FROM maintenance_requests mr
-      JOIN tenant t ON mr.room_no = t.room_no
-      JOIN owner o ON t.ownerno = o.owner_id
-      WHERE o.owner_id = ? AND mr.user_type = 'tenant'
-    `;
-    params.push(numericId);
-  } else if (userType === "admin" || userType === "employee") {
-    sql = "SELECT id, room_no, description, status, submitted_at FROM maintenance_requests WHERE user_type = 'tenant'";
-  } else {
-    console.log("Validation failed: Invalid userType:", userType);
-    return res.status(400).json({ error: "Invalid userType. Must be 'tenant', 'owner', 'admin', or 'employee'" });
-  }
-
-  sql += " ORDER BY submitted_at DESC";
-  if (!all) {
-    sql += " LIMIT 5";
-  } else {
-    sql += ` LIMIT ${limit} OFFSET ${offset}`;
+    return res.status(401).json({ error: "Utilisateur non connecté." });
   }
 
   try {
-    const results = await db.query(sql, params);
-    console.log("Fetched maintenance requests:", results);
-    res.json(results);
+    // Validate userId format
+    const numericId = parseInt(userId.split("-")[1] || userId);
+    if (isNaN(numericId)) {
+      return res.status(400).json({ error: "Format de userId invalide. Attendu : <type>-<id>" });
+    }
+
+    // Validate userType
+    const validUserTypes = ["tenant", "owner", "admin", "employee"];
+    if (!validUserTypes.includes(userType)) {
+      return res.status(400).json({ error: "Type d'utilisateur invalide. Types autorisés : tenant, owner, admin, employee" });
+    }
+
+    let sql;
+    let params;
+    if (userType === "tenant") {
+      sql = `
+        SELECT id, block_no, room_no, tenant_id, description, status, submitted_at
+        FROM maintenance_requests
+        WHERE tenant_id = ?
+        ORDER BY submitted_at DESC
+        LIMIT ? OFFSET ?
+      `;
+      params = [numericId, pageSize, offset];
+    } else {
+      sql = `
+        SELECT id, block_no, room_no, tenant_id, description, status, submitted_at
+        FROM maintenance_requests
+        WHERE room_no IN (
+          SELECT room_no 
+          FROM owner 
+          WHERE owner_id IN (
+            SELECT id 
+            FROM auth_owner 
+            WHERE id = ?
+          )
+        )
+        ORDER BY submitted_at DESC
+        LIMIT ? OFFSET ?
+      `;
+      params = [numericId, pageSize, offset];
+    }
+
+    const requests = await db.query(sql, params);
+    res.json(requests);
   } catch (err) {
-    console.error("Erreur serveur:", err);
-    res.status(500).json({ error: "Erreur serveur: " + err.message });
+    console.error("Erreur serveur in /maintenancerequests:", err);
+    if (err.code === "ER_ACCESS_DENIED_ERROR") {
+      res.status(500).json({ error: "Erreur de connexion à la base de données : Accès refusé. Vérifiez les identifiants de la base de données." });
+    } else if (err.code === "ECONNREFUSED") {
+      res.status(500).json({ error: "Erreur de connexion à la base de données : Connexion refusée. Assurez-vous que le serveur MySQL est en marche." });
+    } else {
+      res.status(500).json({ error: "Erreur serveur : " + err.message });
+    }
   }
 });
 
@@ -825,11 +976,11 @@ app.get("/systemstatus", async (req, res) => {
 
     res.json({
       uptime: uptime,
-      activeUsers: activeUsersResult.activeUsers || 0,
-      alerts: alertsResult.alertCount || 0,
+      activeUsers: activeUsersResult[0].activeUsers || 0,
+      alerts: alertsResult[0].alertCount || 0,
     });
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /systemstatus:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
@@ -860,12 +1011,12 @@ app.get("/quickstats", async (req, res) => {
     const [pendingRequestsResult] = await db.query(pendingRequestsSql, []);
 
     res.json({
-      totalLoginsToday: loginsTodayResult.totalLoginsToday || 0,
-      totalComplaintsFiled: complaintsResult.totalComplaintsFiled || 0,
-      pendingRequests: pendingRequestsResult.pendingRequests || 0,
+      totalLoginsToday: loginsTodayResult[0].totalLoginsToday || 0,
+      totalComplaintsFiled: complaintsResult[0].totalComplaintsFiled || 0,
+      pendingRequests: pendingRequestsResult[0].pendingRequests || 0,
     });
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /quickstats:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
@@ -880,9 +1031,9 @@ app.get("/systemalerts", async (req, res) => {
       AND created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
     `;
     const [results] = await db.query(sql, []);
-    res.json({ alerts: results.alertCount });
+    res.json({ alerts: results[0].alertCount });
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /systemalerts:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
@@ -897,16 +1048,17 @@ app.post("/submitmaintenancerequest", async (req, res) => {
     return res.status(400).json({ error: "Missing required fields: userId, userType, room_no, description" });
   }
 
-  const numericId = parseInt(userId.substring(2)); // Extract numeric part (e.g., "t-101" -> 101)
+  const numericId = parseInt(userId.split("-")[1] || userId);
   const sql = "INSERT INTO maintenance_requests (user_id, user_type, room_no, description, status, submitted_at) VALUES (?, ?, ?, ?, 'pending', NOW())";
   try {
     const result = await db.query(sql, [numericId, userType, room_no, description]);
     res.json({ message: "Maintenance request submitted successfully", requestId: result.insertId });
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /submitmaintenancerequest:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
+
 app.post("/pendingtasks", async (req, res) => {
   const { userId } = req.body;
   console.log("Received /pendingtasks request:", { userId });
@@ -916,9 +1068,8 @@ app.post("/pendingtasks", async (req, res) => {
     return res.status(400).json({ error: "Missing userId in request body" });
   }
 
-  const numericId = parseInt(userId.substring(2)); // Extract numeric part (e.g., "e-701" -> 701)
+  const numericId = parseInt(userId.split("-")[1] || userId);
   try {
-    // Fetch the employee's block_no
     const employeeSql = "SELECT block_no FROM employee WHERE emp_id = ?";
     const employeeResult = await db.query(employeeSql, [numericId]);
     if (!employeeResult || employeeResult.length === 0) {
@@ -928,7 +1079,6 @@ app.post("/pendingtasks", async (req, res) => {
 
     const blockNo = employeeResult[0].block_no;
 
-    // Fetch maintenance requests in the employee's block
     const sql = `
       SELECT mr.id, mr.room_no, mr.description, mr.status, mr.submitted_at
       FROM maintenance_requests mr
@@ -944,6 +1094,7 @@ app.post("/pendingtasks", async (req, res) => {
     res.status(500).json({ error: "Error fetching pending tasks: " + err.message });
   }
 });
+
 // Update user profile
 app.put("/updateprofile/:userType", async (req, res) => {
   const { userId, block_no, email, phone, password, name, room_no, age, dob } = req.body;
@@ -953,14 +1104,13 @@ app.put("/updateprofile/:userType", async (req, res) => {
   console.log(`Received userType: ${userType}`);
 
   try {
-    const numericId = parseInt(userId.substring(2)); // e.g., "t-101" -> 101
+    const numericId = parseInt(userId.split("-")[1] || userId);
     console.log(`Updating profile for userType: ${userType}, userId: ${userId}, numericId: ${numericId}`);
 
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: "Adresse e-mail invalide." });
     }
 
-    // ADMIN
     if (userType === "admin") {
       if (!block_no || !/^\d+$/.test(block_no) || parseInt(block_no) <= 0) {
         return res.status(400).json({ error: "Le numéro de bloc doit être un entier positif." });
@@ -997,10 +1147,7 @@ app.put("/updateprofile/:userType", async (req, res) => {
       }
 
       return res.json({ message: "Profil mis à jour avec succès. Veuillez vérifier votre nouvelle adresse e-mail si elle a été modifiée." });
-    }
-
-    // TENANT
-    else if (userType === "tenant") {
+    } else if (userType === "tenant") {
       const result = await db.query(
         "UPDATE tenant SET name = ?, room_no = ?, age = ?, dob = ?, email = ?, is_email_verified = FALSE WHERE tenant_id = ?",
         [name, room_no, age, dob, email, numericId]
@@ -1021,10 +1168,7 @@ app.put("/updateprofile/:userType", async (req, res) => {
       }
 
       return res.json({ message: "Profil mis à jour avec succès. Veuillez vérifier votre nouvelle adresse e-mail si elle a été modifiée." });
-    }
-
-    // OWNER
-    else if (userType === "owner") {
+    } else if (userType === "owner") {
       const result = await db.query(
         "UPDATE owner SET name = ?, email = ?, is_email_verified = FALSE WHERE owner_id = ?",
         [name, email, numericId]
@@ -1045,10 +1189,7 @@ app.put("/updateprofile/:userType", async (req, res) => {
       }
 
       return res.json({ message: "Profil mis à jour avec succès. Veuillez vérifier votre nouvelle adresse e-mail si elle a été modifiée." });
-    }
-
-    // EMPLOYEE
-    else if (userType === "employee") {
+    } else if (userType === "employee") {
       const result = await db.query(
         "UPDATE employee SET emp_name = ?, email = ?, block_no = ?, is_email_verified = FALSE WHERE emp_id = ?",
         [name, email, block_no, numericId]
@@ -1069,10 +1210,7 @@ app.put("/updateprofile/:userType", async (req, res) => {
       }
 
       return res.json({ message: "Profil mis à jour avec succès. Veuillez vérifier votre nouvelle adresse e-mail si elle a été modifiée." });
-    }
-
-    // INVALID TYPE
-    else {
+    } else {
       return res.status(400).json({ error: "Type d'utilisateur invalide." });
     }
   } catch (error) {
@@ -1080,7 +1218,6 @@ app.put("/updateprofile/:userType", async (req, res) => {
     return res.status(500).json({ error: "Erreur lors de la mise à jour du profil: " + error.message });
   }
 });
-
 
 // Send message (for employee messaging)
 app.post("/sendmessage", async (req, res) => {
@@ -1095,7 +1232,7 @@ app.post("/sendmessage", async (req, res) => {
     const result = await db.query(sql, [sender_id, sender_type, receiver_id, receiver_type, subject, message]);
     res.json({ message: "Message sent successfully", messageId: result.insertId });
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /sendmessage:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
@@ -1108,18 +1245,16 @@ app.get("/usersformessaging", async (req, res) => {
     const adminsResult = await db.query(adminsSql);
     const ownersResult = await db.query(ownersSql);
 
-    // Ensure results are arrays, even in edge cases
     const admins = Array.isArray(adminsResult) ? adminsResult : [];
     const owners = Array.isArray(ownersResult) ? ownersResult : [];
 
-    // Log the values for debugging
     console.log("Admins after processing:", admins);
     console.log("Owners after processing:", owners);
 
     const users = [...admins, ...owners];
     res.json(users);
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /usersformessaging:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
@@ -1128,7 +1263,7 @@ app.get("/usersformessaging", async (req, res) => {
 app.post("/get-auth-id", async (req, res) => {
   const { userId } = req.body;
   try {
-    const numericId = parseInt(userId.substring(2)); // Extract numeric part (e.g., "t-101" -> 101)
+    const numericId = parseInt(userId.split("-")[1] || userId);
     res.json({ id: numericId });
   } catch (error) {
     console.error("Erreur lors de la récupération de l'ID auth:", error);
@@ -1150,7 +1285,7 @@ app.post("/block_admin", async (req, res) => {
     }
     res.json(result);
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /block_admin:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
@@ -1159,17 +1294,20 @@ app.post("/block_admin", async (req, res) => {
 app.post("/block", async (req, res) => {
   const { room_no } = req.body;
   if (!room_no) {
+    console.log("Missing room_no in /block request");
     return res.status(400).json({ error: "Missing room_no in request body" });
   }
 
   try {
     const result = await db.getBlockByRoomNo(room_no);
     if (!result) {
+      console.log(`Block not found for room_no: ${room_no}`);
       return res.status(404).json({ error: "Block not found for the given room number" });
     }
+    console.log(`Block found for room_no: ${room_no}`, result);
     res.json(result);
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Error in /block endpoint:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
@@ -1181,13 +1319,20 @@ app.post("/paymentstatus", async (req, res) => {
     return res.status(400).json({ error: "Missing userId in request body" });
   }
 
-  const numericId = parseInt(userId.substring(2)); // Extract numeric part (e.g., "t-101" -> 101)
   try {
+    const numericId = parseInt(userId.split("-")[1] || userId);
     const result = await db.getPaymentStatus(numericId);
     if (!result) {
       return res.status(404).json({ error: "Payment status not found for userId: " + numericId });
     }
-    res.json(result);
+    // Map database status to user-friendly format
+    const status = result.status === "Payé" ? "paid" : "overdue";
+    const response = {
+      status,
+      amountDue: status === "overdue" ? 1000 : 0, // Example amount, adjust based on schema
+      nextPaymentDate: result.dueDate || null,
+    };
+    res.json(response);
   } catch (err) {
     console.error("Error fetching payment status:", err);
     res.status(500).json({ error: "Error fetching payment status: " + err.message });
@@ -1225,7 +1370,7 @@ app.get("/available-blocks", async (req, res) => {
     const results = await db.query(sql, []);
     res.json(results);
   } catch (err) {
-    console.error("Erreur serveur:", err);
+    console.error("Erreur serveur in /available-blocks:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
@@ -1233,7 +1378,6 @@ app.get("/available-blocks", async (req, res) => {
 // Fetch all users for management portal
 app.get("/all-users", async (req, res) => {
   try {
-    // Fetch admins
     const adminsSql = "SELECT admin_id AS id, admin_name AS name, 'admin' AS type, email, is_email_verified FROM block_admin";
     const adminsResult = await db.query(adminsSql);
     console.log("Raw admins query result:", adminsResult);
@@ -1249,7 +1393,6 @@ app.get("/all-users", async (req, res) => {
     }
     console.log("Admins:", admins);
 
-    // Fetch owners
     const ownersSql = "SELECT owner_id AS id, name, 'owner' AS type, email, is_email_verified FROM owner";
     const ownersResult = await db.query(ownersSql);
     console.log("Raw owners query result:", ownersResult);
@@ -1265,7 +1408,6 @@ app.get("/all-users", async (req, res) => {
     }
     console.log("Owners:", owners);
 
-    // Fetch tenants
     const tenantsSql = "SELECT tenant_id AS id, name, 'tenant' AS type, email, is_email_verified FROM tenant";
     const tenantsResult = await db.query(tenantsSql);
     console.log("Raw tenants query result:", tenantsResult);
@@ -1281,7 +1423,6 @@ app.get("/all-users", async (req, res) => {
     }
     console.log("Tenants:", tenants);
 
-    // Fetch employees
     const employeesSql = "SELECT emp_id AS id, emp_name AS name, 'employee' AS type, email, is_email_verified FROM employee";
     const employeesResult = await db.query(employeesSql);
     console.log("Raw employees query result:", employeesResult);
@@ -1297,7 +1438,6 @@ app.get("/all-users", async (req, res) => {
     }
     console.log("Employees:", employees);
 
-    // Combine all users
     const users = [...(admins || []), ...(owners || []), ...(tenants || []), ...(employees || [])];
     res.status(200).json(users);
   } catch (err) {
@@ -1309,7 +1449,6 @@ app.get("/all-users", async (req, res) => {
 // Fetch analytics data for management portal
 app.get("/analytics", async (req, res) => {
   try {
-    // Total users
     const totalUsersSql = `
       SELECT 
         (SELECT COUNT(*) FROM block_admin) +
@@ -1319,50 +1458,96 @@ app.get("/analytics", async (req, res) => {
     `;
     const [totalUsersResult] = await db.query(totalUsersSql);
 
-    // Total admins
     const totalAdminsSql = "SELECT COUNT(*) AS totalAdmins FROM block_admin";
     const [totalAdminsResult] = await db.query(totalAdminsSql);
 
-    // Total owners
     const totalOwnersSql = "SELECT COUNT(*) AS totalOwners FROM owner";
     const [totalOwnersResult] = await db.query(totalOwnersSql);
 
-    // Total tenants
     const totalTenantsSql = "SELECT COUNT(*) AS totalTenants FROM tenant";
     const [totalTenantsResult] = await db.query(totalTenantsSql);
 
-    // Total employees
     const totalEmployeesSql = "SELECT COUNT(*) AS totalEmployees FROM employee";
     const [totalEmployeesResult] = await db.query(totalEmployeesSql);
 
-    // Active leases (tenants with active status)
     const activeLeasesSql = "SELECT COUNT(*) AS activeLeases FROM tenant WHERE stat = 'active'";
     const [activeLeasesResult] = await db.query(activeLeasesSql);
 
-    // Pending maintenance requests
     const pendingRequestsSql = "SELECT COUNT(*) AS pendingRequests FROM maintenance_requests WHERE status = 'pending'";
     const [pendingRequestsResult] = await db.query(pendingRequestsSql);
 
     res.json({
-      totalUsers: totalUsersResult.totalUsers || 0,
-      totalAdmins: totalAdminsResult.totalAdmins || 0,
-      totalOwners: totalOwnersResult.totalOwners || 0,
-      totalTenants: totalTenantsResult.totalTenants || 0,
-      totalEmployees: totalEmployeesResult.totalEmployees || 0,
-      activeLeases: activeLeasesResult.activeLeases || 0,
-      pendingRequests: pendingRequestsResult.pendingRequests || 0,
+      totalUsers: totalUsersResult[0].totalUsers || 0,
+      totalAdmins: totalAdminsResult[0].totalAdmins || 0,
+      totalOwners: totalOwnersResult[0].totalOwners || 0,
+      totalTenants: totalTenantsResult[0].totalTenants || 0,
+      totalEmployees: totalEmployeesResult[0].totalEmployees || 0,
+      activeLeases: activeLeasesResult[0].activeLeases || 0,
+      pendingRequests: pendingRequestsResult[0].pendingRequests || 0,
     });
   } catch (err) {
     console.error("Erreur lors de la récupération des analyses:", err);
     res.status(500).json({ error: "Erreur serveur: " + err.message });
   }
 });
+// Fetch tenant overview for owners
+// In index.js
+app.post("/tenantoverview", async (req, res) => {
+  const { userId } = req.body;
+  console.log("Received /tenantoverview request:", { userId });
 
+  if (!userId) {
+    console.log("Missing userId in request body");
+    return res.status(400).json({ error: "Missing userId in request body" });
+  }
+
+  try {
+    const numericId = parseInt(userId.split("-")[1] || userId);
+    if (isNaN(numericId)) {
+      console.log("Invalid userId format:", userId);
+      return res.status(400).json({ error: "Invalid userId format" });
+    }
+
+    const sqlTotalTenants = `
+      SELECT COUNT(*) AS totalTenants
+      FROM tenant
+      WHERE ownerno = ?
+    `;
+    const totalTenantsResult = await db.query(sqlTotalTenants, [numericId]);
+    console.log("Total tenants query executed for ownerno:", numericId, "Result:", totalTenantsResult);
+
+    const sqlActiveLeases = `
+      SELECT COUNT(*) AS activeLeases
+      FROM tenant
+      WHERE ownerno = ? AND stat = 'Payé'
+    `;
+    const activeLeasesResult = await db.query(sqlActiveLeases, [numericId]);
+    console.log("Active leases query executed for ownerno:", numericId, "Result:", activeLeasesResult);
+
+    // Safely access totalTenants and activeLeases
+    const totalTenants = totalTenantsResult && totalTenantsResult[0] && typeof totalTenantsResult[0].totalTenants === 'number'
+      ? totalTenantsResult[0].totalTenants
+      : 0;
+    const activeLeases = activeLeasesResult && activeLeasesResult[0] && typeof activeLeasesResult[0].activeLeases === 'number'
+      ? activeLeasesResult[0].activeLeases
+      : 0;
+
+    res.json({
+      totalTenants,
+      activeLeases,
+    });
+  } catch (err) {
+    console.error("Error fetching tenant overview:", {
+      message: err.message,
+      stack: err.stack,
+    });
+    res.status(500).json({ error: "Error fetching tenant overview: " + err.message });
+  }
+});
 // Delete a user
 app.delete("/delete-user", async (req, res) => {
   const { userId, userType } = req.body;
 
-  // Validate userId and userType
   if (!userId || !userType) {
     return res.status(400).json({ error: "User ID and type are required" });
   }
@@ -1381,7 +1566,6 @@ app.delete("/delete-user", async (req, res) => {
   try {
     await db.query("START TRANSACTION");
 
-    // Map userType to the corresponding tables
     const tableMap = {
       admin: { table: "block_admin", column: "admin_id", authTable: "auth_admin" },
       owner: { table: "owner", column: "owner_id", authTable: "auth_owner" },
@@ -1391,7 +1575,6 @@ app.delete("/delete-user", async (req, res) => {
 
     const { table, column, authTable } = tableMap[userType];
 
-    // Delete from the role-specific table (e.g., owner, block_admin)
     const sql = `DELETE FROM ${table} WHERE ${column} = ?`;
     const userResult = await db.query(sql, [numericUserId]);
     const userAffectedRows = userResult[0]?.affectedRows || userResult.affectedRows || 0;
@@ -1401,7 +1584,6 @@ app.delete("/delete-user", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    // No need to delete from auth_* table due to ON DELETE CASCADE
     await db.query("COMMIT");
     console.log(`Deleted user: type=${userType}, userId=${numericUserId}`);
     res.status(200).json({ message: "User deleted successfully" });

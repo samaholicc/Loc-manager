@@ -307,7 +307,3 @@ Merci de suivre les étapes suivantes :
 
 ---
 
-## Licence
-
-Ce projet est sous licence **MIT**.  
-Voir le fichier [LICENSE](LICENSE) pour plus d'informations.
